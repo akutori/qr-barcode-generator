@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[oc]
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Runtime data
+generated/
+
+# Tools
+.claude
+.python-version
+
+# JetBrains IDE
+.idea/
+*.iml

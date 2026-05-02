@@ -1,0 +1,20 @@
+[project]
+name = "qr-barcode-gui"
+version = "0.1.0"
+description = "QR コード / バーコード生成 GUI ツール"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "python-barcode>=0.16.1",
+    "qrcode[pil]>=8.2",
+    "tkeasygui>=1.0.42",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pyinstaller>=6.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
