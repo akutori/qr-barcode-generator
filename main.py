@@ -106,9 +106,10 @@ class App:
         self.records = load_metadata(METADATA_FILE)
         self.current_path: str | None = None
         self._photo = None  # ImageTk.PhotoImage の GC 防止
+        self._filtered_indices: list[int] = []
 
         self._build_ui()
-        self._populate_list()
+        self._filter_records()
         if self.records:
             self._show_record(self.records[-1])
 
@@ -145,6 +146,11 @@ class App:
                  font=(_FONT, 10, "bold"), anchor="w").pack(fill="x")
         tk.Label(lf, text="ダブルクリック: 拡大  Ctrl+クリック: 複数選択",
                  font=(_FONT, 8), fg="gray", anchor="w").pack(fill="x")
+
+        self._search_var = tk.StringVar()
+        self._search_var.trace_add("write", lambda *_: self._filter_records())
+        tk.Entry(lf, textvariable=self._search_var, font=(_FONT, 10)).pack(
+            fill="x", pady=(2, 0))
 
         # Listbox: 残りの縦スペースをすべて使う
         lb_f = tk.Frame(lf)
@@ -198,10 +204,25 @@ class App:
 
     # ── 内部ヘルパー ───────────────────────────────────────────────────────
 
+    def _filter_records(self) -> None:
+        query = self._search_var.get().strip().lower()
+        if query:
+            self._filtered_indices = [
+                i for i, r in enumerate(self.records)
+                if query in r["text"].lower()
+            ]
+        else:
+            self._filtered_indices = list(range(len(self.records)))
+        self._populate_list()
+
+    def _rec_idx(self, lb_idx: int) -> int:
+        return self._filtered_indices[lb_idx]
+
     def _populate_list(self) -> None:
         self.listbox.delete(0, tk.END)
-        for label in list_labels(self.records):
-            self.listbox.insert(tk.END, label)
+        labels = list_labels(self.records)
+        for i in self._filtered_indices:
+            self.listbox.insert(tk.END, labels[i])
 
     def _show_record(self, rec: dict) -> None:
         self.current_path = rec["path"]
@@ -234,19 +255,19 @@ class App:
 
     def _on_list_select(self, _: tk.Event) -> None:
         sel = self.listbox.curselection()
-        if not sel or sel[-1] >= len(self.records):
+        if not sel or sel[-1] >= len(self._filtered_indices):
             return
-        self._show_record(self.records[sel[-1]])
+        self._show_record(self.records[self._rec_idx(sel[-1])])
 
     def _on_list_double(self, _: tk.Event) -> None:
         sel = self.listbox.curselection()
-        if not sel or sel[0] >= len(self.records):
+        if not sel or sel[0] >= len(self._filtered_indices):
             return
-        show_enlarged(self.records[sel[0]], self.root)
+        show_enlarged(self.records[self._rec_idx(sel[0])], self.root)
 
     def _on_list_right_click(self, event: tk.Event) -> None:
         idx = self.listbox.nearest(event.y)
-        if idx < 0 or idx >= len(self.records):
+        if idx < 0 or idx >= len(self._filtered_indices):
             return
         self.listbox.selection_clear(0, tk.END)
         self.listbox.selection_set(idx)
@@ -254,10 +275,10 @@ class App:
 
     def _copy_selected_text(self) -> None:
         sel = self.listbox.curselection()
-        if not sel or sel[0] >= len(self.records):
+        if not sel or sel[0] >= len(self._filtered_indices):
             return
         self.root.clipboard_clear()
-        self.root.clipboard_append(self.records[sel[0]]["text"])
+        self.root.clipboard_append(self.records[self._rec_idx(sel[0])]["text"])
 
     def on_generate(self) -> None:
         text = self.entry_var.get().strip()
@@ -280,7 +301,8 @@ class App:
             self.records.append(rec)
             save_metadata(self.records, METADATA_FILE)
 
-            self._populate_list()
+            self._search_var.set("")  # 検索をクリアして新規アイテムを確実に表示
+            self._filter_records()
             self.listbox.selection_clear(0, tk.END)
             self.listbox.selection_set(tk.END)
             self.listbox.see(tk.END)
@@ -297,18 +319,18 @@ class App:
             messagebox.showinfo("削除", "削除するアイテムを選択してください。",
                                 parent=self.root)
             return
-        indices = [i for i in sel if i < len(self.records)]
-        count = len(indices)
-        msg = f"{count} 件削除しますか？" if count > 1 else f"削除しますか？\n{list_labels(self.records)[indices[0]]}"
+        rec_indices = [self._rec_idx(i) for i in sel if i < len(self._filtered_indices)]
+        count = len(rec_indices)
+        msg = f"{count} 件削除しますか？" if count > 1 else f"削除しますか？\n{list_labels(self.records)[rec_indices[0]]}"
         if messagebox.askyesno("確認", msg, parent=self.root):
-            for i in sorted(indices, reverse=True):
+            for i in sorted(rec_indices, reverse=True):
                 try:
                     Path(self.records[i]["path"]).unlink(missing_ok=True)
                 except Exception:
                     pass
                 self.records.pop(i)
             save_metadata(self.records, METADATA_FILE)
-            self._populate_list()
+            self._filter_records()
             self.preview_label.config(image="")
             self._photo = None
             self.detail_label.config(text="")
@@ -320,7 +342,7 @@ class App:
             messagebox.showinfo("PDF出力", "出力するアイテムを選択してください。\n(Ctrl+クリックで複数選択)",
                                 parent=self.root)
             return
-        selected = [self.records[i] for i in sel if i < len(self.records)]
+        selected = [self.records[self._rec_idx(i)] for i in sel if i < len(self._filtered_indices)]
         path = filedialog.asksaveasfilename(
             parent=self.root,
             defaultextension=".pdf",
