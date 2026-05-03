@@ -42,7 +42,16 @@ def save_metadata(records: list[dict], path: Path) -> None:
 
 
 def generate_qr(text: str, filepath: Path) -> None:
-    qr = qrcode.make(text).convert("RGB")
+    try:
+        qr = qrcode.make(text).convert("RGB")
+    except Exception as e:
+        if "version" in str(e).lower():
+            raise ValueError(
+                f"テキストが長すぎてQRコードに収まりません。\n"
+                f"上限の目安: 英数字 4,296文字 / バイナリ 2,953バイト\n"
+                f"入力サイズ: {len(text.encode())} バイト"
+            ) from e
+        raise
 
     font = _load_font(14)
     text_h = 24
