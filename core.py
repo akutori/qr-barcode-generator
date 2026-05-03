@@ -10,11 +10,23 @@ from barcode.writer import ImageWriter
 
 _FONT_CANDIDATES: list[str] = []
 if sys.platform == "win32":
-    _FONT_CANDIDATES = ["C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/calibri.ttf"]
+    _FONT_CANDIDATES = [
+        "C:/Windows/Fonts/meiryo.ttc",
+        "C:/Windows/Fonts/msgothic.ttc",
+        "C:/Windows/Fonts/YuGothM.ttc",
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/calibri.ttf",
+    ]
 elif sys.platform == "darwin":
-    _FONT_CANDIDATES = ["/System/Library/Fonts/Helvetica.ttc"]
+    _FONT_CANDIDATES = [
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ]
 else:
-    _FONT_CANDIDATES = ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    _FONT_CANDIDATES = [
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
 
 
 def _load_font(size: int = 14) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -68,6 +80,8 @@ def generate_qr(text: str, filepath: Path) -> None:
 
 
 def generate_barcode_file(text: str, base_path: Path) -> Path:
+    if not text.isascii():
+        raise ValueError("バーコード (Code128) は ASCII 文字のみ対応しています。日本語・絵文字は使用できません。")
     code = barcode.get("code128", text, writer=ImageWriter())
     saved = code.save(str(base_path))
     return Path(saved)
