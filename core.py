@@ -83,6 +83,67 @@ def fit_image(path: str, w: int, h: int) -> bytes:
     return img_to_bytes(bg)
 
 
+_MAX_LABEL_LEN = 25
+
+
+def _truncate_label(text: str) -> str:
+    return text[:_MAX_LABEL_LEN] + "…" if len(text) > _MAX_LABEL_LEN else text
+
+
+def generate_pdf_grid(records: list[dict], output_path: Path, cols: int = 3) -> None:
+    PAGE_W, PAGE_H = 1240, 1754  # A4 @ 150 DPI
+    MARGIN = 60
+    GAP = 30
+    CELL_IMG_H = 280
+    LABEL_H = 32
+    CELL_H = CELL_IMG_H + 8 + LABEL_H
+
+    cell_w = (PAGE_W - 2 * MARGIN - (cols - 1) * GAP) // cols
+    rows_per_page = (PAGE_H - 2 * MARGIN + GAP) // (CELL_H + GAP)
+    per_page = cols * rows_per_page
+
+    font = _load_font(24)
+    pages: list[Image.Image] = []
+
+    for page_start in range(0, len(records), per_page):
+        page_recs = records[page_start: page_start + per_page]
+        canvas = Image.new("RGB", (PAGE_W, PAGE_H), (255, 255, 255))
+        draw = ImageDraw.Draw(canvas)
+
+        for i, rec in enumerate(page_recs):
+            col = i % cols
+            row = i // cols
+            x = MARGIN + col * (cell_w + GAP)
+            y = MARGIN + row * (CELL_H + GAP)
+
+            try:
+                img = Image.open(rec["path"]).convert("RGB")
+                img.thumbnail((cell_w, CELL_IMG_H), Image.LANCZOS)
+                ix = x + (cell_w - img.width) // 2
+                iy = y + (CELL_IMG_H - img.height) // 2
+                canvas.paste(img, (ix, iy))
+            except Exception:
+                pass
+
+            label = _truncate_label(rec["text"])
+            bbox = draw.textbbox((0, 0), label, font=font)
+            lw = bbox[2] - bbox[0]
+            lx = x + (cell_w - min(lw, cell_w)) // 2
+            ly = y + CELL_IMG_H + 8
+            draw.text((lx, ly), label, fill=(0, 0, 0), font=font)
+
+        pages.append(canvas)
+
+    if pages:
+        pages[0].save(
+            str(output_path),
+            save_all=True,
+            append_images=pages[1:],
+            format="PDF",
+            resolution=150,
+        )
+
+
 def list_labels(records: list[dict]) -> list[str]:
     return [f"[{r['type']}]  {r['text']}" for r in records]
 

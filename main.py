@@ -4,12 +4,13 @@ import sys
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
 
 from core import (
     generate_barcode_file,
+    generate_pdf_grid,
     generate_qr,
     list_labels,
     load_metadata,
@@ -132,8 +133,10 @@ class App:
 
         ttk.Separator(lf, orient="horizontal").pack(fill="x", pady=(0, 4))
 
-        tk.Label(lf, text="生成済み一覧  (ダブルクリックで拡大表示)",
+        tk.Label(lf, text="生成済み一覧",
                  font=("", 10, "bold"), anchor="w").pack(fill="x")
+        tk.Label(lf, text="ダブルクリック: 拡大  Ctrl+クリック: 複数選択",
+                 font=("", 8), fg="gray", anchor="w").pack(fill="x")
 
         # Listbox: 残りの縦スペースをすべて使う
         lb_f = tk.Frame(lf)
@@ -142,7 +145,7 @@ class App:
         sb = tk.Scrollbar(lb_f)
         sb.pack(side="right", fill="y")
         self.listbox = tk.Listbox(lb_f, font=("Consolas", 10),
-                                   yscrollcommand=sb.set, selectmode="single",
+                                   yscrollcommand=sb.set, selectmode="extended",
                                    activestyle="dotbox")
         self.listbox.pack(expand=True, fill="both")
         sb.config(command=self.listbox.yview)
@@ -161,6 +164,9 @@ class App:
                   command=self.on_delete).pack(side="left")
         tk.Button(btn_f, text="フォルダを開く", font=("", 10),
                   command=self.on_open_folder).pack(side="left", padx=(4, 0))
+
+        tk.Button(lf, text="選択してPDF出力", font=("", 10),
+                  command=self.on_export_pdf).pack(fill="x", pady=(4, 0))
 
         # 縦セパレータ
         ttk.Separator(self.root, orient="vertical").pack(side="left", fill="y")
@@ -220,9 +226,9 @@ class App:
 
     def _on_list_select(self, _: tk.Event) -> None:
         sel = self.listbox.curselection()
-        if not sel or sel[0] >= len(self.records):
+        if not sel or sel[-1] >= len(self.records):
             return
-        self._show_record(self.records[sel[0]])
+        self._show_record(self.records[sel[-1]])
 
     def _on_list_double(self, _: tk.Event) -> None:
         sel = self.listbox.curselection()
@@ -300,6 +306,28 @@ class App:
             self._photo = None
             self.detail_label.config(text="")
             self.current_path = None
+
+    def on_export_pdf(self) -> None:
+        sel = self.listbox.curselection()
+        if not sel:
+            messagebox.showinfo("PDF出力", "出力するアイテムを選択してください。\n(Ctrl+クリックで複数選択)",
+                                parent=self.root)
+            return
+        selected = [self.records[i] for i in sel if i < len(self.records)]
+        path = filedialog.asksaveasfilename(
+            parent=self.root,
+            defaultextension=".pdf",
+            filetypes=[("PDF ファイル", "*.pdf")],
+            title="PDFを保存",
+        )
+        if not path:
+            return
+        try:
+            generate_pdf_grid(selected, Path(path))
+            messagebox.showinfo("PDF出力", f"{len(selected)} 件を保存しました。\n{path}",
+                                parent=self.root)
+        except Exception as e:
+            messagebox.showerror("エラー", f"PDF出力に失敗しました:\n{e}", parent=self.root)
 
     def on_open_folder(self) -> None:
         resolved = str(SAVE_DIR.resolve())
