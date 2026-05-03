@@ -45,8 +45,11 @@ uv run main.py
 # テストの実行
 uv run pytest
 
+# アイコン生成
+uv run python create_icon.py
+
 # バイナリのビルド
-uv run pyinstaller --onefile --noconsole --add-data "core.py;." --name QR-Barcode-GUI main.py
+uv run pyinstaller --onefile --noconsole --add-data "core.py;." --icon assets/icon.ico --name QR-Barcode-GUI main.py
 ```
 
 ## プロジェクト構成
