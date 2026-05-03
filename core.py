@@ -40,6 +40,17 @@ def list_labels(records: list[dict]) -> list[str]:
     return [f"[{r['type']}]  {r['text']}" for r in records]
 
 
+def list_labels_with_status(records: list[dict]) -> list[str]:
+    """ファイルが欠損しているレコードには末尾に ⚠ を付ける。"""
+    labels = []
+    for r in records:
+        label = f"[{r['type']}]  {r['text']}"
+        if not Path(r["path"]).exists():
+            label += "  ⚠"
+        labels.append(label)
+    return labels
+
+
 def find_index(label: str, records: list[dict]) -> int:
     for i, r in enumerate(records):
         if f"[{r['type']}]  {r['text']}" == label:

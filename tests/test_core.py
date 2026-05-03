@@ -13,6 +13,7 @@ from core import (
     fit_image,
     img_to_bytes,
     list_labels,
+    list_labels_with_status,
     load_metadata,
     save_metadata,
 )
@@ -105,6 +106,32 @@ class TestListLabels:
             {"text": "world", "type": "Barcode", "path": "..."},
         ]
         assert list_labels(records) == ["[QR]  hello", "[Barcode]  world"]
+
+
+class TestListLabelsWithStatus:
+    def test_ファイルが存在するレコードはそのまま返す(self, tmp_path):
+        img = tmp_path / "qr.png"
+        img.write_bytes(b"dummy")
+        records = [{"text": "hello", "type": "QR", "path": str(img)}]
+        assert list_labels_with_status(records) == ["[QR]  hello"]
+
+    def test_ファイルが存在しないレコードには警告記号を付ける(self, tmp_path):
+        records = [{"text": "hello", "type": "QR", "path": str(tmp_path / "missing.png")}]
+        assert list_labels_with_status(records) == ["[QR]  hello  ⚠"]
+
+    def test_存在するものと欠損が混在する場合に正しく区別する(self, tmp_path):
+        existing = tmp_path / "ok.png"
+        existing.write_bytes(b"dummy")
+        records = [
+            {"text": "ok", "type": "QR", "path": str(existing)},
+            {"text": "missing", "type": "Barcode", "path": str(tmp_path / "gone.png")},
+        ]
+        result = list_labels_with_status(records)
+        assert result[0] == "[QR]  ok"
+        assert result[1] == "[Barcode]  missing  ⚠"
+
+    def test_空リストは空リストを返す(self):
+        assert list_labels_with_status([]) == []
 
 
 class TestFindIndex:

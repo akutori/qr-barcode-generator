@@ -8,7 +8,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
 
-from core import list_labels, load_metadata, save_metadata
+from core import list_labels, list_labels_with_status, load_metadata, save_metadata
 from generators import generate_barcode_file, generate_pdf_grid, generate_qr
 
 _FONT = "Meiryo"
@@ -204,7 +204,7 @@ class App:
 
     def _populate_list(self) -> None:
         self.listbox.delete(0, tk.END)
-        labels = list_labels(self.records)
+        labels = list_labels_with_status(self.records)
         for i in self._filtered_indices:
             self.listbox.insert(tk.END, labels[i])
 
@@ -218,6 +218,11 @@ class App:
     def _redraw_preview(self) -> None:
         if not self.current_path:
             return
+        if not Path(self.current_path).exists():
+            self.preview_label.config(image="", text="ファイルが見つかりません",
+                                       font=(_FONT, 11), fg="gray")
+            self._photo = None
+            return
         w = self.preview_label.winfo_width()
         h = self.preview_label.winfo_height()
         if w <= 1 or h <= 1:
@@ -226,7 +231,7 @@ class App:
             img = Image.open(self.current_path).convert("RGB")
             img.thumbnail((w, h), Image.LANCZOS)
             self._photo = ImageTk.PhotoImage(img)
-            self.preview_label.config(image=self._photo)
+            self.preview_label.config(image=self._photo, text="", fg="black")
         except Exception:
             pass
 
