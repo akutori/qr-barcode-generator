@@ -37,6 +37,7 @@ def _bundled(relative: str) -> Path:
 SAVE_DIR = _app_dir() / "generated"
 METADATA_FILE = SAVE_DIR / "metadata.json"
 LEFT_W = 310        # 左パネル固定幅 (px)
+_FONT = "Meiryo"
 WIN_MIN_W = 560
 WIN_MIN_H = 380
 
@@ -65,11 +66,11 @@ def show_enlarged(record: dict, root: tk.Tk) -> None:
     info = tk.Frame(top)
     info.pack(fill="x", padx=6, pady=(3, 6))
     tk.Label(info, text=f"[{record['type']}]  {record['text']}",
-             font=("", 10, "bold")).pack()
+             font=(_FONT, 10, "bold")).pack()
     tk.Label(info, text=f"保存先: {record['path']}",
-             font=("", 8), fg="gray").pack()
+             font=(_FONT, 8), fg="gray").pack()
     tk.Button(info, text="閉じる", width=10, command=top.destroy,
-              font=("", 10)).pack(pady=3)
+              font=(_FONT, 10)).pack(pady=3)
 
     _photo = [None]
 
@@ -119,11 +120,11 @@ class App:
         lf.pack(side="left", fill="y", padx=(8, 4), pady=8)
         lf.pack_propagate(False)   # 幅を固定
 
-        tk.Label(lf, text="テキスト入力:", font=("", 11, "bold"),
+        tk.Label(lf, text="テキスト入力:", font=(_FONT, 11, "bold"),
                  anchor="w").pack(fill="x")
 
         self.entry_var = tk.StringVar()
-        self.entry = tk.Entry(lf, textvariable=self.entry_var, font=("", 11))
+        self.entry = tk.Entry(lf, textvariable=self.entry_var, font=(_FONT, 11))
         self.entry.pack(fill="x", pady=(0, 4))
         self.entry.bind("<Return>", lambda _: self.on_generate())
 
@@ -131,19 +132,19 @@ class App:
         radio_f.pack(fill="x", pady=(0, 4))
         self.type_var = tk.StringVar(value="QR")
         tk.Radiobutton(radio_f, text="QR コード", variable=self.type_var,
-                       value="QR", font=("", 10)).pack(side="left")
+                       value="QR", font=(_FONT, 10)).pack(side="left")
         tk.Radiobutton(radio_f, text="バーコード (Code128)", variable=self.type_var,
-                       value="Barcode", font=("", 10)).pack(side="left")
+                       value="Barcode", font=(_FONT, 10)).pack(side="left")
 
-        tk.Button(lf, text="生成して保存", font=("", 11, "bold"),
+        tk.Button(lf, text="生成して保存", font=(_FONT, 11, "bold"),
                   command=self.on_generate).pack(fill="x", pady=(0, 8))
 
         ttk.Separator(lf, orient="horizontal").pack(fill="x", pady=(0, 4))
 
         tk.Label(lf, text="生成済み一覧",
-                 font=("", 10, "bold"), anchor="w").pack(fill="x")
+                 font=(_FONT, 10, "bold"), anchor="w").pack(fill="x")
         tk.Label(lf, text="ダブルクリック: 拡大  Ctrl+クリック: 複数選択",
-                 font=("", 8), fg="gray", anchor="w").pack(fill="x")
+                 font=(_FONT, 8), fg="gray", anchor="w").pack(fill="x")
 
         # Listbox: 残りの縦スペースをすべて使う
         lb_f = tk.Frame(lf)
@@ -167,12 +168,12 @@ class App:
 
         btn_f = tk.Frame(lf)
         btn_f.pack(fill="x")
-        tk.Button(btn_f, text="削除", font=("", 10), width=8,
+        tk.Button(btn_f, text="削除", font=(_FONT, 10), width=8,
                   command=self.on_delete).pack(side="left")
-        tk.Button(btn_f, text="フォルダを開く", font=("", 10),
+        tk.Button(btn_f, text="フォルダを開く", font=(_FONT, 10),
                   command=self.on_open_folder).pack(side="left", padx=(4, 0))
 
-        tk.Button(lf, text="選択してPDF出力", font=("", 10),
+        tk.Button(lf, text="選択してPDF出力", font=(_FONT, 10),
                   command=self.on_export_pdf).pack(fill="x", pady=(4, 0))
 
         # 縦セパレータ
@@ -182,7 +183,7 @@ class App:
         rf = tk.Frame(self.root)
         rf.pack(side="right", expand=True, fill="both", padx=(4, 8), pady=8)
 
-        tk.Label(rf, text="プレビュー", font=("", 11, "bold"),
+        tk.Label(rf, text="プレビュー", font=(_FONT, 11, "bold"),
                  anchor="w").pack(fill="x")
 
         # プレビュー画像ラベル: 右パネルの大部分を占める
@@ -191,7 +192,7 @@ class App:
         # サイズ変化のたびに画像を再描画 (ウィンドウリサイズ対応)
         self.preview_label.bind("<Configure>", self._on_preview_resize)
 
-        self.detail_label = tk.Label(rf, text="", font=("", 10),
+        self.detail_label = tk.Label(rf, text="", font=(_FONT, 10),
                                       anchor="w", justify="left")
         self.detail_label.pack(fill="x", pady=(4, 0))
 
