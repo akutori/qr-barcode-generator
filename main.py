@@ -296,17 +296,16 @@ class App:
             messagebox.showinfo("削除", "削除するアイテムを選択してください。",
                                 parent=self.root)
             return
-        idx = sel[0]
-        if idx >= len(self.records):
-            return
-        rec = self.records[idx]
-        label = list_labels(self.records)[idx]
-        if messagebox.askyesno("確認", f"削除しますか？\n{label}", parent=self.root):
-            try:
-                Path(rec["path"]).unlink(missing_ok=True)
-            except Exception:
-                pass
-            self.records.pop(idx)
+        indices = [i for i in sel if i < len(self.records)]
+        count = len(indices)
+        msg = f"{count} 件削除しますか？" if count > 1 else f"削除しますか？\n{list_labels(self.records)[indices[0]]}"
+        if messagebox.askyesno("確認", msg, parent=self.root):
+            for i in sorted(indices, reverse=True):
+                try:
+                    Path(self.records[i]["path"]).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                self.records.pop(i)
             save_metadata(self.records, METADATA_FILE)
             self._populate_list()
             self.preview_label.config(image="")
