@@ -46,7 +46,7 @@ def list_labels_with_status(records: list[dict]) -> list[str]:
     for r in records:
         label = f"[{r['type']}]  {r['text']}"
         if not Path(r["path"]).exists():
-            label += "  ⚠"
+            label = "⚠  " + label
         labels.append(label)
     return labels
 
