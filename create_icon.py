@@ -35,7 +35,6 @@ def make_frame(size: int) -> Image.Image:
                         radius=max(2, size // 10),
                         fill=(*_BG, 255))
 
-    # QR 側（左）
     if size >= 32:
         qr_w = mid - pad
         module = max(1, qr_w // 9)
@@ -59,17 +58,14 @@ def make_frame(size: int) -> Image.Image:
                         if x + dot < mid - 2 and y + dot < size - pad:
                             d.rectangle([x, y, x + dot - 1, y + dot - 1], fill=_DARK)
     else:
-        # 16x16: finder は入らないので外枠＋白内枠
         sq = mid - pad - 1
         d.rectangle([pad, pad, pad + sq - 1, pad + sq - 1], fill=_DARK)
         inner = max(1, sq // 3)
         d.rectangle([pad + inner, pad + inner,
                      pad + sq - inner - 1, pad + sq - inner - 1], fill=_BG)
 
-    # 仕切り線
     d.line([(mid, pad), (mid, size - pad)], fill=(200, 200, 200, 255), width=1)
 
-    # バーコード側（右）
     vpad = max(pad, size // 8)
     _bars(d, mid + pad, pad + vpad, size - pad - vpad, mid - pad * 2)
 
@@ -80,7 +76,6 @@ def main() -> None:
     out = Path("assets/icon.ico")
     out.parent.mkdir(exist_ok=True)
 
-    # 256x256 を基底に Pillow がリサイズして各サイズを ICO に格納
     base = make_frame(256)
     base.save(str(out), format="ICO", sizes=[(256, 256), (48, 48), (32, 32), (16, 16)])
     print(f"Saved: {out}")
