@@ -12,11 +12,14 @@ from core import (
     calc_preview_size,
     find_index,
     fit_image,
+    has_duplicate,
     img_to_bytes,
     list_labels,
     list_labels_with_status,
     load_metadata,
+    load_settings,
     save_metadata,
+    save_settings,
 )
 
 
@@ -54,6 +57,47 @@ class TestLoadMetadata:
         path.write_text("{ broken json", encoding="utf-8")
         with pytest.raises(json.JSONDecodeError):
             load_metadata(path)
+
+
+# ---------------------------------------------------------------------------
+# 設定
+# ---------------------------------------------------------------------------
+
+class TestLoadSettings:
+    def test_ファイルが存在しないときデフォルト値を返す(self, tmp_path):
+        settings = load_settings(tmp_path / "settings.json")
+        assert settings["warn_on_duplicate"] is True
+
+    def test_保存した設定をそのまま読み返せる(self, tmp_path):
+        path = tmp_path / "settings.json"
+        save_settings({"warn_on_duplicate": False}, path)
+        assert load_settings(path)["warn_on_duplicate"] is False
+
+    def test_ファイルに存在しないキーはデフォルト値で補完される(self, tmp_path):
+        path = tmp_path / "settings.json"
+        save_settings({}, path)
+        assert load_settings(path)["warn_on_duplicate"] is True
+
+
+# ---------------------------------------------------------------------------
+# 重複チェック
+# ---------------------------------------------------------------------------
+
+class TestHasDuplicate:
+    def test_同じテキストと種別が存在するときTrueを返す(self):
+        records = [{"text": "hello", "type": "QR", "path": "qr.png"}]
+        assert has_duplicate("hello", "QR", records) is True
+
+    def test_テキストが異なるときFalseを返す(self):
+        records = [{"text": "hello", "type": "QR", "path": "qr.png"}]
+        assert has_duplicate("world", "QR", records) is False
+
+    def test_種別が異なるときFalseを返す(self):
+        records = [{"text": "hello", "type": "QR", "path": "qr.png"}]
+        assert has_duplicate("hello", "Barcode", records) is False
+
+    def test_空リストはFalseを返す(self):
+        assert has_duplicate("hello", "QR", []) is False
 
 
 # ---------------------------------------------------------------------------

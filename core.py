@@ -36,6 +36,26 @@ def fit_image(path: str, w: int, h: int) -> bytes:
     return img_to_bytes(bg)
 
 
+_DEFAULT_SETTINGS: dict = {"warn_on_duplicate": True}
+
+
+def load_settings(path: Path) -> dict:
+    if path.exists():
+        with open(path, "r", encoding="utf-8") as f:
+            stored = json.load(f)
+        return {**_DEFAULT_SETTINGS, **stored}
+    return dict(_DEFAULT_SETTINGS)
+
+
+def save_settings(settings: dict, path: Path) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+
+
+def has_duplicate(text: str, code_type: str, records: list[dict]) -> bool:
+    return any(r["text"] == text and r["type"] == code_type for r in records)
+
+
 def list_labels(records: list[dict]) -> list[str]:
     return [f"[{r['type']}]  {r['text']}" for r in records]
 

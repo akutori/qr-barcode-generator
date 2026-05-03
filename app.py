@@ -10,7 +10,15 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
 
-from core import list_labels, list_labels_with_status, load_metadata, save_metadata
+from core import (
+    has_duplicate,
+    list_labels,
+    list_labels_with_status,
+    load_metadata,
+    load_settings,
+    save_metadata,
+    save_settings,
+)
 from generators import generate_barcode_file, generate_pdf_grid, generate_qr
 
 _FONT = "Meiryo"
@@ -31,6 +39,7 @@ def _app_dir() -> Path:
 
 SAVE_DIR = _app_dir() / "generated"
 METADATA_FILE = SAVE_DIR / "metadata.json"
+SETTINGS_FILE = SAVE_DIR / "settings.json"
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +102,7 @@ class App:
 
         SAVE_DIR.mkdir(exist_ok=True)
         self.records = self._load_metadata_safe()
+        self.settings = load_settings(SETTINGS_FILE)
         self.current_path: str | None = None
         self._photo = None  # ImageTk.PhotoImage の GC 防止
         self._filtered_indices: list[int] = []
@@ -314,6 +324,44 @@ class App:
         except Exception as e:
             messagebox.showerror("エラー", f"画像のコピーに失敗しました:\n{e}", parent=self.root)
 
+    def _ask_duplicate(self, text: str, code_type: str) -> bool:
+        """重複確認ダイアログを表示し、生成を続けるか返す。「これ以降は表示しない」で警告を無効化できる。"""
+        top = tk.Toplevel(self.root)
+        top.title("重複確認")
+        top.resizable(False, False)
+        top.grab_set()
+
+        tk.Label(top, text=f"[{code_type}]  {text}\nはすでに存在します。追加しますか？",
+                 font=(_FONT, 10), padx=16, pady=12, justify="left").pack()
+
+        no_warn_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(top, text="これ以降は表示しない", variable=no_warn_var,
+                       font=(_FONT, 9)).pack(pady=(0, 8))
+
+        result = [False]
+
+        def on_ok() -> None:
+            result[0] = True
+            top.destroy()
+
+        def on_cancel() -> None:
+            top.destroy()
+
+        btn_f = tk.Frame(top)
+        btn_f.pack(pady=(0, 12))
+        tk.Button(btn_f, text="追加する", font=(_FONT, 10), width=10,
+                  command=on_ok).pack(side="left", padx=6)
+        tk.Button(btn_f, text="キャンセル", font=(_FONT, 10), width=10,
+                  command=on_cancel).pack(side="left", padx=6)
+
+        self.root.wait_window(top)
+
+        if no_warn_var.get():
+            self.settings["warn_on_duplicate"] = False
+            save_settings(self.settings, SETTINGS_FILE)
+
+        return result[0]
+
     def on_generate(self) -> None:
         text = self.entry_var.get().strip()
         if not text:
@@ -321,15 +369,18 @@ class App:
                                    parent=self.root)
             return
 
+        code_type = self.type_var.get()
+        if self.settings.get("warn_on_duplicate", True) and has_duplicate(text, code_type, self.records):
+            if not self._ask_duplicate(text, code_type):
+                return
+
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         try:
-            if self.type_var.get() == "QR":
+            if code_type == "QR":
                 fp = SAVE_DIR / f"qr_{ts}.png"
                 generate_qr(text, fp)
-                code_type = "QR"
             else:
                 fp = generate_barcode_file(text, SAVE_DIR / f"bar_{ts}")
-                code_type = "Barcode"
 
             rec = {"text": text, "type": code_type, "path": str(fp)}
             self.records.append(rec)
