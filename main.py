@@ -27,6 +27,13 @@ def _app_dir() -> Path:
     return Path(__file__).parent
 
 
+def _bundled(relative: str) -> Path:
+    """PyInstaller の展開先 (_MEIPASS) またはスクリプトの親ディレクトリを返す。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / relative  # type: ignore[attr-defined]
+    return Path(__file__).parent / relative
+
+
 SAVE_DIR = _app_dir() / "generated"
 METADATA_FILE = SAVE_DIR / "metadata.json"
 LEFT_W = 310        # 左パネル固定幅 (px)
@@ -343,6 +350,9 @@ class App:
 
 def main() -> None:
     root = tk.Tk()
+    icon = _bundled("assets/icon.ico")
+    if icon.exists():
+        root.iconbitmap(str(icon))
     App(root)
     root.mainloop()
 
