@@ -1,6 +1,7 @@
 """core.py のユニットテスト: ストレージ / 画像ユーティリティ / ラベル (t_wada 式 TDD)"""
 
 import io
+import json
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,12 @@ class TestLoadMetadata:
         ]
         save_metadata(records, path)
         assert len(load_metadata(path)) == 2
+
+    def test_破損したJSONは例外を送出する(self, tmp_path):
+        path = tmp_path / "broken.json"
+        path.write_text("{ broken json", encoding="utf-8")
+        with pytest.raises(json.JSONDecodeError):
+            load_metadata(path)
 
 
 # ---------------------------------------------------------------------------

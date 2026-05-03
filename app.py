@@ -1,4 +1,6 @@
+import json
 import os
+import shutil
 import subprocess
 import sys
 import tkinter as tk
@@ -90,7 +92,7 @@ class App:
         self.root.geometry("760x520")
 
         SAVE_DIR.mkdir(exist_ok=True)
-        self.records = load_metadata(METADATA_FILE)
+        self.records = self._load_metadata_safe()
         self.current_path: str | None = None
         self._photo = None  # ImageTk.PhotoImage の GC 防止
         self._filtered_indices: list[int] = []
@@ -99,6 +101,32 @@ class App:
         self._filter_records()
         if self.records:
             self._show_record(self.records[-1])
+
+    def _load_metadata_safe(self) -> list[dict]:
+        try:
+            return load_metadata(METADATA_FILE)
+        except json.JSONDecodeError:
+            answer = messagebox.askyesno(
+                "データエラー",
+                "metadata.json が破損しているため読み込めませんでした。\n\n"
+                "バックアップを作成して一覧を空にしますか？\n"
+                "（「いいえ」を選択するとアプリを終了します）",
+                parent=self.root,
+            )
+            if answer:
+                backup = METADATA_FILE.with_suffix(".json.bak")
+                shutil.copy2(METADATA_FILE, backup)
+                records: list[dict] = []
+                save_metadata(records, METADATA_FILE)
+                messagebox.showinfo(
+                    "バックアップ完了",
+                    f"バックアップを作成しました。\n{backup}",
+                    parent=self.root,
+                )
+                return records
+            else:
+                self.root.destroy()
+                raise SystemExit
 
     # ── UI 構築 ────────────────────────────────────────────────────────────
 
