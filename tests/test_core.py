@@ -117,7 +117,7 @@ class TestListLabelsWithStatus:
 
     def test_ファイルが存在しないレコードには警告記号を付ける(self, tmp_path):
         records = [{"text": "hello", "type": "QR", "path": str(tmp_path / "missing.png")}]
-        assert list_labels_with_status(records) == ["⚠  [QR]  hello"]
+        assert list_labels_with_status(records) == ["[QR]  ⚠  hello"]
 
     def test_存在するものと欠損が混在する場合に正しく区別する(self, tmp_path):
         existing = tmp_path / "ok.png"
@@ -128,7 +128,7 @@ class TestListLabelsWithStatus:
         ]
         result = list_labels_with_status(records)
         assert result[0] == "[QR]  ok"
-        assert result[1] == "⚠  [Barcode]  missing"
+        assert result[1] == "[Barcode]  ⚠  missing"
 
     def test_空リストは空リストを返す(self):
         assert list_labels_with_status([]) == []

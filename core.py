@@ -44,9 +44,10 @@ def list_labels_with_status(records: list[dict]) -> list[str]:
     """ファイルが欠損しているレコードには末尾に ⚠ を付ける。"""
     labels = []
     for r in records:
-        label = f"[{r['type']}]  {r['text']}"
-        if not Path(r["path"]).exists():
-            label = "⚠  " + label
+        if Path(r["path"]).exists():
+            label = f"[{r['type']}]  {r['text']}"
+        else:
+            label = f"[{r['type']}]  ⚠  {r['text']}"
         labels.append(label)
     return labels
 
