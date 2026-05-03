@@ -100,7 +100,7 @@ class App:
         self.root = root
         self.root.title("QR & バーコード 生成ツール")
         self.root.minsize(WIN_MIN_W, WIN_MIN_H)
-        self.root.geometry("760x500")
+        self.root.geometry("760x520")
 
         SAVE_DIR.mkdir(exist_ok=True)
         self.records = load_metadata(METADATA_FILE)
@@ -170,6 +170,9 @@ class App:
         self._context_menu = tk.Menu(self.root, tearoff=0)
         self._context_menu.add_command(
             label="テキストをコピー", command=self._copy_selected_text
+        )
+        self._context_menu.add_command(
+            label="画像をコピー", command=self._copy_selected_image
         )
 
         btn_f = tk.Frame(lf)
@@ -279,6 +282,24 @@ class App:
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(self.records[self._rec_idx(sel[0])]["text"])
+
+    def _copy_selected_image(self) -> None:
+        # clip.exe はテキスト専用のため画像コピー不可。
+        # pywin32 依存を避けるため PowerShell の SetImage を使用。
+        # [Windows.Forms.Clipboard]::SetImage() が依存追加なしの最小構成。
+        sel = self.listbox.curselection()
+        if not sel or sel[0] >= len(self._filtered_indices):
+            return
+        path = self.records[self._rec_idx(sel[0])]["path"]
+        try:
+            subprocess.run(
+                ["powershell", "-command",
+                 f"Add-Type -A System.Windows.Forms,System.Drawing;"
+                 f"[Windows.Forms.Clipboard]::SetImage([Drawing.Image]::FromFile('{path}'))"],
+                check=True,
+            )
+        except Exception as e:
+            messagebox.showerror("エラー", f"画像のコピーに失敗しました:\n{e}", parent=self.root)
 
     def on_generate(self) -> None:
         text = self.entry_var.get().strip()
