@@ -47,7 +47,7 @@ def list_labels_with_status(records: list[dict]) -> list[str]:
         if Path(r["path"]).exists():
             label = f"[{r['type']}]  {r['text']}"
         else:
-            label = f"[{r['type']}]  ⚠  {r['text']}"
+            label = f"⚠[{r['type']}]  {r['text']}"
         labels.append(label)
     return labels
 
