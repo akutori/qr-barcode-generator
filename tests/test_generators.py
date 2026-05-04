@@ -46,6 +46,30 @@ class TestGenerateQR:
         generate_qr("日本語テスト", fp)
         assert fp.exists()
 
+    def test_誤り訂正レベルLでファイルが生成される(self, tmp_path):
+        fp = tmp_path / "qr_L.png"
+        generate_qr("hello", fp, error_correction="L")
+        assert fp.exists()
+
+    def test_誤り訂正レベルHでファイルが生成される(self, tmp_path):
+        fp = tmp_path / "qr_H.png"
+        generate_qr("hello", fp, error_correction="H")
+        assert fp.exists()
+
+    def test_誤り訂正レベルHはLより画像サイズが大きい(self, tmp_path):
+        """H は誤り訂正データが多いためモジュール数が増え画像が大きくなる"""
+        fp_l = tmp_path / "qr_L.png"
+        fp_h = tmp_path / "qr_H.png"
+        generate_qr("hello", fp_l, error_correction="L")
+        generate_qr("hello", fp_h, error_correction="H")
+        assert Image.open(str(fp_h)).width >= Image.open(str(fp_l)).width
+
+    def test_不正な誤り訂正レベルはMとして扱われる(self, tmp_path):
+        """未知のレベル文字列はデフォルト M にフォールバックしてエラーにならない"""
+        fp = tmp_path / "qr_fallback.png"
+        generate_qr("hello", fp, error_correction="X")
+        assert fp.exists()
+
 
 # ---------------------------------------------------------------------------
 # バーコード生成

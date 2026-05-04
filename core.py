@@ -36,7 +36,12 @@ def fit_image(path: str, w: int, h: int) -> bytes:
     return img_to_bytes(bg)
 
 
-_DEFAULT_SETTINGS: dict = {"warn_on_duplicate": True}
+_DEFAULT_SETTINGS: dict = {
+    "warn_on_duplicate": True,
+    "default_type": "QR",
+    "qr_error_correction": "M",
+    "pdf_cols": 3,
+}
 
 
 def load_settings(path: Path) -> dict:
@@ -52,29 +57,49 @@ def save_settings(settings: dict, path: Path) -> None:
         json.dump(settings, f, ensure_ascii=False, indent=2)
 
 
-def has_duplicate(text: str, code_type: str, records: list[dict]) -> bool:
-    return any(r["text"] == text and r["type"] == code_type for r in records)
+def _type_label(r: dict) -> str:
+    """レコードの種別ラベルを返す。QR は誤り訂正レベルを付加する（例: QR:H）。"""
+    if r["type"] == "QR" and r.get("error_correction"):
+        return f"QR:{r['error_correction']}"
+    return r["type"]
+
+
+def has_duplicate(
+    text: str,
+    code_type: str,
+    records: list[dict],
+    error_correction: str | None = None,
+) -> bool:
+    """完全一致チェック。QR の場合は error_correction も一致するときのみ True。
+
+    レコードに error_correction フィールドがない旧データは保守的に重複と判定する。
+    """
+    for r in records:
+        if r["text"] != text or r["type"] != code_type:
+            continue
+        if code_type == "QR" and error_correction is not None and "error_correction" in r:
+            if r["error_correction"] != error_correction:
+                continue
+        return True
+    return False
 
 
 def list_labels(records: list[dict]) -> list[str]:
-    return [f"[{r['type']}]  {r['text']}" for r in records]
+    return [f"[{_type_label(r)}]  {r['text']}" for r in records]
 
 
 def list_labels_with_status(records: list[dict]) -> list[str]:
-    """ファイルが欠損しているレコードには末尾に ⚠ を付ける。"""
+    """ファイルが欠損しているレコードには先頭に ⚠ を付ける。"""
     labels = []
     for r in records:
-        if Path(r["path"]).exists():
-            label = f"[{r['type']}]  {r['text']}"
-        else:
-            label = f"⚠[{r['type']}]  {r['text']}"
-        labels.append(label)
+        prefix = "" if Path(r["path"]).exists() else "⚠"
+        labels.append(f"{prefix}[{_type_label(r)}]  {r['text']}")
     return labels
 
 
 def find_index(label: str, records: list[dict]) -> int:
     for i, r in enumerate(records):
-        if f"[{r['type']}]  {r['text']}" == label:
+        if f"[{_type_label(r)}]  {r['text']}" == label:
             return i
     return -1
 

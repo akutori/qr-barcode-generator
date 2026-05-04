@@ -99,6 +99,19 @@ class TestHasDuplicate:
     def test_空リストはFalseを返す(self):
         assert has_duplicate("hello", "QR", []) is False
 
+    def test_QRで同じテキストだが誤り訂正レベルが異なるときFalseを返す(self):
+        records = [{"text": "hello", "type": "QR", "path": "qr.png", "error_correction": "M"}]
+        assert has_duplicate("hello", "QR", records, error_correction="H") is False
+
+    def test_QRで同じテキストと誤り訂正レベルが一致するときTrueを返す(self):
+        records = [{"text": "hello", "type": "QR", "path": "qr.png", "error_correction": "M"}]
+        assert has_duplicate("hello", "QR", records, error_correction="M") is True
+
+    def test_誤り訂正レベルフィールドのない旧レコードは保守的にTrueを返す(self):
+        """error_correction フィールドがない旧レコードはレベルを問わず重複と判定する"""
+        records = [{"text": "hello", "type": "QR", "path": "qr.png"}]
+        assert has_duplicate("hello", "QR", records, error_correction="H") is True
+
 
 # ---------------------------------------------------------------------------
 # 画像ユーティリティ
@@ -158,6 +171,14 @@ class TestListLabels:
         ]
         assert list_labels(records) == ["[QR]  hello", "[Barcode]  world"]
 
+    def test_QRに誤り訂正レベルが含まれる場合は角括弧内に表示される(self):
+        records = [{"text": "hello", "type": "QR", "path": "...", "error_correction": "H"}]
+        assert list_labels(records) == ["[QR:H]  hello"]
+
+    def test_誤り訂正レベルのないQRは従来フォーマットで返す(self):
+        records = [{"text": "hello", "type": "QR", "path": "..."}]
+        assert list_labels(records) == ["[QR]  hello"]
+
 
 class TestListLabelsWithStatus:
     def test_ファイルが存在するレコードはそのまま返す(self, tmp_path):
@@ -183,6 +204,17 @@ class TestListLabelsWithStatus:
 
     def test_空リストは空リストを返す(self):
         assert list_labels_with_status([]) == []
+
+    def test_QRに誤り訂正レベルが含まれる場合は角括弧内に表示される(self, tmp_path):
+        img = tmp_path / "qr.png"
+        img.write_bytes(b"dummy")
+        records = [{"text": "hello", "type": "QR", "path": str(img), "error_correction": "L"}]
+        assert list_labels_with_status(records) == ["[QR:L]  hello"]
+
+    def test_欠損レコードでもQRの誤り訂正レベルが表示される(self, tmp_path):
+        records = [{"text": "hello", "type": "QR",
+                    "path": str(tmp_path / "missing.png"), "error_correction": "H"}]
+        assert list_labels_with_status(records) == ["⚠[QR:H]  hello"]
 
 
 class TestFindIndex:

@@ -107,10 +107,59 @@ class App:
         self._photo = None  # ImageTk.PhotoImage の GC 防止
         self._filtered_indices: list[int] = []
 
+        self._build_menu()
         self._build_ui()
         self._filter_records()
         if self.records:
             self._show_record(self.records[-1])
+
+    # ── メニュー ──────────────────────────────────────────────────────────────
+
+    def _build_menu(self) -> None:
+        menubar = tk.Menu(self.root)
+        opt_menu = tk.Menu(menubar, tearoff=0)
+        self._warn_var = tk.BooleanVar(value=self.settings.get("warn_on_duplicate", True))
+        opt_menu.add_checkbutton(
+            label="重複確認ダイアログを表示する",
+            variable=self._warn_var,
+            command=self._on_warn_toggle,
+        )
+        opt_menu.add_separator()
+        opt_menu.add_command(label="バージョン情報", command=self._show_about)
+        menubar.add_cascade(label="オプション", menu=opt_menu)
+        self.root.config(menu=menubar)
+
+    def _on_warn_toggle(self) -> None:
+        self.settings["warn_on_duplicate"] = self._warn_var.get()
+        save_settings(self.settings, SETTINGS_FILE)
+
+    def _show_about(self) -> None:
+        messagebox.showinfo(
+            "バージョン情報",
+            "QR & バーコード 生成ツール\nバージョン 1.4.0",
+            parent=self.root,
+        )
+
+    # ── 設定変更コールバック ──────────────────────────────────────────────────
+
+    def _on_type_change(self) -> None:
+        if self.type_var.get() == "QR":
+            self._ec_frame.pack(fill="x", pady=(0, 4), after=self._radio_f)
+        else:
+            self._ec_frame.pack_forget()
+        self.settings["default_type"] = self.type_var.get()
+        save_settings(self.settings, SETTINGS_FILE)
+
+    def _on_ec_change(self, *_) -> None:
+        self.settings["qr_error_correction"] = self._ec_var.get()
+        save_settings(self.settings, SETTINGS_FILE)
+
+    def _on_pdf_cols_change(self, *_) -> None:
+        try:
+            self.settings["pdf_cols"] = self._pdf_cols_var.get()
+            save_settings(self.settings, SETTINGS_FILE)
+        except tk.TclError:
+            pass
 
     def _load_metadata_safe(self) -> list[dict]:
         try:
@@ -153,13 +202,29 @@ class App:
         self.entry.pack(fill="x", pady=(0, 4))
         self.entry.bind("<Return>", lambda _: self.on_generate())
 
-        radio_f = tk.Frame(lf)
-        radio_f.pack(fill="x", pady=(0, 4))
-        self.type_var = tk.StringVar(value="QR")
+        self._radio_f = radio_f = tk.Frame(lf)
+        radio_f.pack(fill="x", pady=(0, 2))
+        self.type_var = tk.StringVar(value=self.settings.get("default_type", "QR"))
         tk.Radiobutton(radio_f, text="QR コード", variable=self.type_var,
-                       value="QR", font=(_FONT, 10)).pack(side="left")
+                       value="QR", font=(_FONT, 10),
+                       command=self._on_type_change).pack(side="left")
         tk.Radiobutton(radio_f, text="バーコード (Code128)", variable=self.type_var,
-                       value="Barcode", font=(_FONT, 10)).pack(side="left")
+                       value="Barcode", font=(_FONT, 10),
+                       command=self._on_type_change).pack(side="left")
+
+        # 誤り訂正レベル（QR 選択時のみ表示）
+        self._ec_frame = tk.Frame(lf)
+        self._ec_var = tk.StringVar(value=self.settings.get("qr_error_correction", "M"))
+        self._ec_var.trace_add("write", self._on_ec_change)
+        tk.Label(self._ec_frame, text="誤り訂正:",
+                 font=(_FONT, 9), fg="gray").pack(side="left")
+        ttk.Combobox(self._ec_frame, textvariable=self._ec_var,
+                     values=["L", "M", "Q", "H"], width=3,
+                     state="readonly", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
+        tk.Label(self._ec_frame, text="L=低  M=中  Q=高  H=最高",
+                 font=(_FONT, 8), fg="gray").pack(side="left", padx=(6, 0))
+        if self.type_var.get() == "QR":
+            self._ec_frame.pack(fill="x", pady=(0, 4))
 
         tk.Button(lf, text="生成して保存", font=(_FONT, 11, "bold"),
                   command=self.on_generate).pack(fill="x", pady=(0, 8))
@@ -205,8 +270,15 @@ class App:
         tk.Button(btn_f, text="フォルダを開く", font=(_FONT, 10),
                   command=self.on_open_folder).pack(side="left", padx=(4, 0))
 
-        tk.Button(lf, text="選択してPDF出力", font=(_FONT, 10),
-                  command=self.on_export_pdf).pack(fill="x", pady=(4, 0))
+        pdf_f = tk.Frame(lf)
+        pdf_f.pack(fill="x", pady=(4, 0))
+        tk.Button(pdf_f, text="選択してPDF出力", font=(_FONT, 9),
+                  command=self.on_export_pdf).pack(side="left", fill="x", expand=True)
+        tk.Label(pdf_f, text="列:", font=(_FONT, 9), fg="gray").pack(side="left", padx=(6, 2))
+        self._pdf_cols_var = tk.IntVar(value=self.settings.get("pdf_cols", 3))
+        self._pdf_cols_var.trace_add("write", self._on_pdf_cols_change)
+        tk.Spinbox(pdf_f, textvariable=self._pdf_cols_var,
+                   from_=1, to=6, width=3, font=(_FONT, 13)).pack(side="left")
 
         ttk.Separator(self.root, orient="vertical").pack(side="left", fill="y")
 
@@ -216,13 +288,14 @@ class App:
         tk.Label(rf, text="プレビュー", font=(_FONT, 11, "bold"),
                  anchor="w").pack(fill="x")
 
+        # detail_label を先に bottom へ固定（preview_label が expand しても隠れなくなる）
+        self.detail_label = tk.Label(rf, text="", font=(_FONT, 10),
+                                      anchor="w", justify="left")
+        self.detail_label.pack(side="bottom", fill="x", pady=(4, 0))
+
         self.preview_label = tk.Label(rf, bg="white", anchor="center")
         self.preview_label.pack(expand=True, fill="both")
         self.preview_label.bind("<Configure>", self._on_preview_resize)
-
-        self.detail_label = tk.Label(rf, text="", font=(_FONT, 10),
-                                      anchor="w", justify="left")
-        self.detail_label.pack(fill="x", pady=(4, 0))
 
     # ── 内部ヘルパー ───────────────────────────────────────────────────────
 
@@ -324,14 +397,15 @@ class App:
         except Exception as e:
             messagebox.showerror("エラー", f"画像のコピーに失敗しました:\n{e}", parent=self.root)
 
-    def _ask_duplicate(self, text: str, code_type: str) -> bool:
+    def _ask_duplicate(self, text: str, code_type: str, error_correction: str | None = None) -> bool:
         """重複確認ダイアログを表示し、生成を続けるか返す。「これ以降は表示しない」で警告を無効化できる。"""
         top = tk.Toplevel(self.root)
         top.title("重複確認")
         top.resizable(False, False)
         top.grab_set()
 
-        tk.Label(top, text=f"[{code_type}]  {text}\nはすでに存在します。追加しますか？",
+        type_label = f"{code_type}:{error_correction}" if code_type == "QR" and error_correction else code_type
+        tk.Label(top, text=f"[{type_label}]  {text}\nはすでに存在します。追加しますか？",
                  font=(_FONT, 10), padx=16, pady=12, justify="left").pack()
 
         no_warn_var = tk.BooleanVar(value=False)
@@ -359,6 +433,7 @@ class App:
         if no_warn_var.get():
             self.settings["warn_on_duplicate"] = False
             save_settings(self.settings, SETTINGS_FILE)
+            self._warn_var.set(False)
 
         return result[0]
 
@@ -370,19 +445,21 @@ class App:
             return
 
         code_type = self.type_var.get()
-        if self.settings.get("warn_on_duplicate", True) and has_duplicate(text, code_type, self.records):
-            if not self._ask_duplicate(text, code_type):
+        ec = self._ec_var.get() if code_type == "QR" else None
+        if self.settings.get("warn_on_duplicate", True) and has_duplicate(text, code_type, self.records, error_correction=ec):
+            if not self._ask_duplicate(text, code_type, error_correction=ec):
                 return
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         try:
             if code_type == "QR":
                 fp = SAVE_DIR / f"qr_{ts}.png"
-                generate_qr(text, fp)
+                generate_qr(text, fp, error_correction=self._ec_var.get())
+                rec = {"text": text, "type": code_type, "path": str(fp),
+                       "error_correction": self._ec_var.get()}
             else:
                 fp = generate_barcode_file(text, SAVE_DIR / f"bar_{ts}")
-
-            rec = {"text": text, "type": code_type, "path": str(fp)}
+                rec = {"text": text, "type": code_type, "path": str(fp)}
             self.records.append(rec)
             save_metadata(self.records, METADATA_FILE)
 
@@ -428,16 +505,18 @@ class App:
                                 parent=self.root)
             return
         selected = [self.records[self._rec_idx(i)] for i in sel if i < len(self._filtered_indices)]
+        default_name = f"qr_barcode_{datetime.now().strftime('%Y%m%d')}.pdf"
         path = filedialog.asksaveasfilename(
             parent=self.root,
             defaultextension=".pdf",
             filetypes=[("PDF ファイル", "*.pdf")],
             title="PDFを保存",
+            initialfile=default_name,
         )
         if not path:
             return
         try:
-            generate_pdf_grid(selected, Path(path))
+            generate_pdf_grid(selected, Path(path), cols=self._pdf_cols_var.get())
             messagebox.showinfo("PDF出力", f"{len(selected)} 件を保存しました。\n{path}",
                                 parent=self.root)
         except Exception as e:

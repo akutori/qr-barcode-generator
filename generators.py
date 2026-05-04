@@ -3,8 +3,16 @@ from pathlib import Path
 
 import barcode
 import qrcode
+import qrcode.constants
 from PIL import Image, ImageDraw, ImageFont
 from barcode.writer import ImageWriter
+
+_EC_MAP = {
+    "L": qrcode.constants.ERROR_CORRECT_L,
+    "M": qrcode.constants.ERROR_CORRECT_M,
+    "Q": qrcode.constants.ERROR_CORRECT_Q,
+    "H": qrcode.constants.ERROR_CORRECT_H,
+}
 
 _FONT_CANDIDATES: list[str] = []
 if sys.platform == "win32":
@@ -39,9 +47,10 @@ def _load_font(size: int = 14) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         return ImageFont.load_default()
 
 
-def generate_qr(text: str, filepath: Path) -> None:
+def generate_qr(text: str, filepath: Path, error_correction: str = "M") -> None:
+    ec = _EC_MAP.get(error_correction, qrcode.constants.ERROR_CORRECT_M)
     try:
-        qr = qrcode.make(text).convert("RGB")
+        qr = qrcode.make(text, error_correction=ec).convert("RGB")
     except Exception as e:
         if "version" in str(e).lower():
             raise ValueError(
