@@ -65,11 +65,13 @@ def generate_qr(text: str, filepath: Path, error_correction: str = "M") -> None:
     canvas = Image.new("RGB", (qr.width, qr.height + text_h), (255, 255, 255))
     canvas.paste(qr, (0, 0))
 
+    # 複数行テキストの場合はラベルを先頭行のみ表示（領域が固定 24px のため）
+    label = _truncate_label(text.split("\n")[0])
     draw = ImageDraw.Draw(canvas)
-    bbox = draw.textbbox((0, 0), text, font=font)
+    bbox = draw.textbbox((0, 0), label, font=font)
     x = (canvas.width - (bbox[2] - bbox[0])) // 2
     y = qr.height + (text_h - (bbox[3] - bbox[1])) // 2
-    draw.text((x, y), text, fill=(0, 0, 0), font=font)
+    draw.text((x, y), label, fill=(0, 0, 0), font=font)
 
     canvas.save(str(filepath))
 
@@ -124,7 +126,7 @@ def generate_pdf_grid(records: list[dict], output_path: Path, cols: int = 3) -> 
             except Exception:
                 pass
 
-            label = _truncate_label(rec["text"])
+            label = _truncate_label(rec["text"].split("\n")[0])
             bbox = draw.textbbox((0, 0), label, font=font)
             lw = bbox[2] - bbox[0]
             lx = x + (cell_w - min(lw, cell_w)) // 2

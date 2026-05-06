@@ -98,7 +98,7 @@ class App:
         self.root = root
         self.root.title("QR & バーコード 生成ツール")
         self.root.minsize(WIN_MIN_W, WIN_MIN_H)
-        self.root.geometry("760x520")
+        self.root.geometry("760x580")
 
         SAVE_DIR.mkdir(exist_ok=True)
         self.records = self._load_metadata_safe()
@@ -106,6 +106,9 @@ class App:
         self.current_path: str | None = None
         self._photo = None  # ImageTk.PhotoImage の GC 防止
         self._filtered_indices: list[int] = []
+        self._tooltip_win: tk.Toplevel | None = None
+        self._tooltip_after: str | None = None
+        self._tooltip_rec_idx: int = -1
 
         self._build_menu()
         self._build_ui()
@@ -143,11 +146,24 @@ class App:
     # ── 設定変更コールバック ──────────────────────────────────────────────────
 
     def _on_type_change(self) -> None:
-        if self.type_var.get() == "QR":
+        t = self.type_var.get()
+        if t == "QR":
+            # Barcode → QR: Entry の内容を qr_text に引き継いで切り替え
+            current = self.entry_var.get()
+            self.entry.pack_forget()
+            self.qr_text.pack(fill="x")   # コンテナ内のため before= 不要
+            if current:
+                self.qr_text.delete("1.0", "end")
+                self.qr_text.insert("1.0", current)
             self._ec_frame.pack(fill="x", pady=(0, 4), after=self._radio_f)
         else:
+            # QR → Barcode: qr_text の先頭行を Entry に引き継いで切り替え
+            first_line = self.qr_text.get("1.0", "end-1c").split("\n")[0].strip()
+            self.qr_text.pack_forget()
+            self.entry.pack(fill="x")     # コンテナ内のため before= 不要
+            self.entry_var.set(first_line)
             self._ec_frame.pack_forget()
-        self.settings["default_type"] = self.type_var.get()
+        self.settings["default_type"] = t
         save_settings(self.settings, SETTINGS_FILE)
 
     def _on_ec_change(self, *_) -> None:
@@ -197,10 +213,26 @@ class App:
         tk.Label(lf, text="テキスト入力:", font=(_FONT, 11, "bold"),
                  anchor="w").pack(fill="x")
 
+        # ── 入力コンテナ（常時表示）──────────────────────────────────────────
+        # ヒントを先に bottom で詰め、入力ウィジェットが上に配置される
+        self._input_frame = tk.Frame(lf)
+        self._input_frame.pack(fill="x", pady=(0, 4))
+
+        tk.Label(
+            self._input_frame,
+            text="Ctrl+Enter で生成",
+            font=(_FONT, 8), fg="gray", anchor="e",
+        ).pack(side="bottom", fill="x")
+
+        # ── QR 用: 2行テキストエリア（改行対応） ───────────────────────────────
+        self.qr_text = tk.Text(self._input_frame, font=(_FONT, 11), height=2,
+                               wrap="word", relief="sunken", bd=2)
+        self.qr_text.bind("<Control-Return>", lambda e: (self.on_generate(), "break")[1])
+
+        # ── Barcode 用: 単行 Entry ───────────────────────────────────────────
         self.entry_var = tk.StringVar()
-        self.entry = tk.Entry(lf, textvariable=self.entry_var, font=(_FONT, 11))
-        self.entry.pack(fill="x", pady=(0, 4))
-        self.entry.bind("<Return>", lambda _: self.on_generate())
+        self.entry = tk.Entry(self._input_frame, textvariable=self.entry_var, font=(_FONT, 11))
+        self.entry.bind("<Control-Return>", lambda _: self.on_generate())
 
         self._radio_f = radio_f = tk.Frame(lf)
         radio_f.pack(fill="x", pady=(0, 2))
@@ -211,6 +243,12 @@ class App:
         tk.Radiobutton(radio_f, text="バーコード (Code128)", variable=self.type_var,
                        value="Barcode", font=(_FONT, 10),
                        command=self._on_type_change).pack(side="left")
+
+        # 初期タイプに応じて入力ウィジェットを表示
+        if self.type_var.get() == "QR":
+            self.qr_text.pack(fill="x")
+        else:
+            self.entry.pack(fill="x")
 
         # 誤り訂正レベル（QR 選択時のみ表示）
         self._ec_frame = tk.Frame(lf)
@@ -254,6 +292,8 @@ class App:
         self.listbox.bind("<<ListboxSelect>>", self._on_list_select)
         self.listbox.bind("<Double-Button-1>", self._on_list_double)
         self.listbox.bind("<Button-3>", self._on_list_right_click)
+        self.listbox.bind("<Motion>", self._on_list_hover)
+        self.listbox.bind("<Leave>", lambda _: self._hide_tooltip())
 
         self._context_menu = tk.Menu(self.root, tearoff=0)
         self._context_menu.add_command(
@@ -321,8 +361,15 @@ class App:
 
     def _show_record(self, rec: dict) -> None:
         self.current_path = rec["path"]
+        # 複数行テキストは先頭 3 行のみ表示（それ以降は行数を表示）
+        lines = rec["text"].split("\n")
+        _MAX_PREVIEW_LINES = 3
+        if len(lines) > _MAX_PREVIEW_LINES:
+            display = "\n".join(lines[:_MAX_PREVIEW_LINES]) + f"\n … (+{len(lines) - _MAX_PREVIEW_LINES}行)"
+        else:
+            display = rec["text"]
         self.detail_label.config(
-            text=f"[{rec['type']}]  {rec['text']}\n{rec['path']}"
+            text=f"[{rec['type']}]  {display}\n{rec['path']}"
         )
         self._redraw_preview()
 
@@ -351,6 +398,53 @@ class App:
             self._redraw_preview()
 
     # ── イベントハンドラ ──────────────────────────────────────────────────
+
+    def _on_list_hover(self, event: tk.Event) -> None:
+        idx = self.listbox.nearest(event.y)
+        if idx < 0 or idx >= len(self._filtered_indices):
+            self._hide_tooltip()
+            return
+        rec_idx = self._rec_idx(idx)
+        if rec_idx == self._tooltip_rec_idx:
+            return  # 同じ行のまま移動 → 再スケジュール不要
+        self._hide_tooltip()
+        self._tooltip_rec_idx = rec_idx
+        x, y = event.x_root + 14, event.y_root + 14
+        self._tooltip_after = self.root.after(
+            400, lambda: self._show_tooltip(self.records[rec_idx]["text"], x, y)
+        )
+
+    def _show_tooltip(self, text: str, x: int, y: int) -> None:
+        lines = text.split("\n")
+        _MAX_TT_LINES = 20
+        if len(lines) > _MAX_TT_LINES:
+            display = "\n".join(lines[:_MAX_TT_LINES]) + f"\n… (+{len(lines) - _MAX_TT_LINES}行)"
+        else:
+            display = text
+        self._tooltip_win = tk.Toplevel(self.root)
+        self._tooltip_win.wm_overrideredirect(True)
+        self._tooltip_win.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            self._tooltip_win,
+            text=display,
+            font=(_FONT, 9),
+            bg="#ffffcc",
+            relief="solid",
+            bd=1,
+            wraplength=400,
+            justify="left",
+            padx=4,
+            pady=3,
+        ).pack()
+
+    def _hide_tooltip(self) -> None:
+        if self._tooltip_after is not None:
+            self.root.after_cancel(self._tooltip_after)
+            self._tooltip_after = None
+        if self._tooltip_win is not None:
+            self._tooltip_win.destroy()
+            self._tooltip_win = None
+        self._tooltip_rec_idx = -1
 
     def _on_list_select(self, _: tk.Event) -> None:
         sel = self.listbox.curselection()
@@ -438,13 +532,16 @@ class App:
         return result[0]
 
     def on_generate(self) -> None:
-        text = self.entry_var.get().strip()
+        code_type = self.type_var.get()
+        if code_type == "QR":
+            text = self.qr_text.get("1.0", "end-1c").strip()
+        else:
+            text = self.entry_var.get().strip()
         if not text:
             messagebox.showwarning("入力エラー", "テキストを入力してください。",
                                    parent=self.root)
             return
 
-        code_type = self.type_var.get()
         ec = self._ec_var.get() if code_type == "QR" else None
         if self.settings.get("warn_on_duplicate", True) and has_duplicate(text, code_type, self.records, error_correction=ec):
             if not self._ask_duplicate(text, code_type, error_correction=ec):
@@ -469,7 +566,10 @@ class App:
             self.listbox.selection_set(tk.END)
             self.listbox.see(tk.END)
             self._show_record(rec)
-            self.entry_var.set("")
+            if code_type == "QR":
+                self.qr_text.delete("1.0", "end")
+            else:
+                self.entry_var.set("")
 
         except Exception as e:
             messagebox.showerror("エラー", f"生成に失敗しました:\n{e}",

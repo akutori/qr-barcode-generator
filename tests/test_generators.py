@@ -70,6 +70,26 @@ class TestGenerateQR:
         generate_qr("hello", fp, error_correction="X")
         assert fp.exists()
 
+    def test_改行を含むテキストでもQRが生成される(self, tmp_path):
+        """vCard・複数行テキスト等の改行入りコンテンツをエンコードできること"""
+        fp = tmp_path / "qr_multi.png"
+        generate_qr("BEGIN:VCARD\nFN:山田太郎\nEND:VCARD", fp)
+        assert fp.exists()
+
+    def test_改行を含むQRのラベルは先頭行のみ表示される(self, tmp_path):
+        """複数行テキストのラベルは先頭行のみ描画され、ラベル領域が増加しない。
+
+        "A"(1 byte) と "A\\nB\\nC"(5 bytes) はどちらも QR version 1(M) に収まるため
+        QR 本体サイズが等しく、ラベルが多行分増えなければ総高さも等しくなる。
+        """
+        fp_single = tmp_path / "qr_single.png"
+        fp_multi = tmp_path / "qr_multi.png"
+        generate_qr("A", fp_single)
+        generate_qr("A\nB\nC", fp_multi)
+        h_single = Image.open(str(fp_single)).height
+        h_multi = Image.open(str(fp_multi)).height
+        assert h_multi == h_single
+
 
 # ---------------------------------------------------------------------------
 # バーコード生成
@@ -165,6 +185,13 @@ class TestGeneratePdfGrid:
 
     def test_25文字を超えるテキストでもエラーにならない(self, tmp_path):
         records = [_png_record(tmp_path, "a" * 50)]
+        output = tmp_path / "out.pdf"
+        generate_pdf_grid(records, output)
+        assert output.exists()
+
+    def test_改行を含むテキストでもPDFが生成される(self, tmp_path):
+        """vCard 等の複数行テキストを持つレコードでも正常に出力できること"""
+        records = [_png_record(tmp_path, "BEGIN:VCARD\nFN:山田\nEND:VCARD")]
         output = tmp_path / "out.pdf"
         generate_pdf_grid(records, output)
         assert output.exists()
