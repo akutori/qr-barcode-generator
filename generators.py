@@ -126,7 +126,8 @@ def generate_pdf_grid(records: list[dict], output_path: Path, cols: int = 3) -> 
             except Exception:
                 pass
 
-            label = _truncate_label(rec["text"].split("\n")[0])
+            label_src = rec.get("description") or rec["text"].split("\n")[0]
+            label = _truncate_label(label_src)
             bbox = draw.textbbox((0, 0), label, font=font)
             lw = bbox[2] - bbox[0]
             lx = x + (cell_w - min(lw, cell_w)) // 2

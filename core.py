@@ -93,7 +93,10 @@ def list_labels_with_status(records: list[dict]) -> list[str]:
     labels = []
     for r in records:
         prefix = "" if Path(r["path"]).exists() else "⚠"
-        labels.append(f"{prefix}[{_type_label(r)}]  {r['text']}")
+        desc = r.get("description", "")
+        default = r["text"].split("\n")[0]
+        desc_suffix = f"  ({desc})" if desc and desc != default else ""
+        labels.append(f"{prefix}[{_type_label(r)}]  {r['text']}{desc_suffix}")
     return labels
 
 

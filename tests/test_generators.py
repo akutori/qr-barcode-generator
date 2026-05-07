@@ -195,3 +195,18 @@ class TestGeneratePdfGrid:
         output = tmp_path / "out.pdf"
         generate_pdf_grid(records, output)
         assert output.exists()
+
+    def test_descriptionフィールドがあってもエラーにならない(self, tmp_path):
+        """description 付きレコードを渡しても PDF が正常に生成されること"""
+        rec = _png_record(tmp_path, "https://example.com")
+        rec["description"] = "商品A"
+        output = tmp_path / "out.pdf"
+        generate_pdf_grid([rec], output)
+        assert output.exists()
+
+    def test_descriptionなしのレコードはテキスト先頭行をラベルとして使う(self, tmp_path):
+        """description がない旧データでも PDF 生成が壊れないこと（後方互換）"""
+        records = [_png_record(tmp_path, "fallback_text")]
+        output = tmp_path / "out.pdf"
+        generate_pdf_grid(records, output)
+        assert output.exists()
