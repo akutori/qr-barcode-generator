@@ -300,6 +300,25 @@ class App:
         tk.Entry(lf, textvariable=self._search_var, font=(_FONT, 10)).pack(
             fill="x", pady=(2, 0))
 
+        # ── ボタン群を先に bottom で確保（リストボックスが縮んでもボタンが常に表示される）──
+        pdf_f = tk.Frame(lf)
+        pdf_f.pack(side="bottom", fill="x", pady=(4, 0))
+        tk.Button(pdf_f, text="選択してPDF出力", font=(_FONT, 9),
+                  command=self.on_export_pdf).pack(side="left", fill="x", expand=True)
+        tk.Label(pdf_f, text="列:", font=(_FONT, 9), fg="gray").pack(side="left", padx=(6, 2))
+        self._pdf_cols_var = tk.IntVar(value=self.settings.get("pdf_cols", 3))
+        self._pdf_cols_var.trace_add("write", self._on_pdf_cols_change)
+        tk.Spinbox(pdf_f, textvariable=self._pdf_cols_var,
+                   from_=1, to=6, width=3, font=(_FONT, 13)).pack(side="left")
+
+        btn_f = tk.Frame(lf)
+        btn_f.pack(side="bottom", fill="x")
+        tk.Button(btn_f, text="削除", font=(_FONT, 10), width=8,
+                  command=self.on_delete).pack(side="left")
+        tk.Button(btn_f, text="フォルダを開く", font=(_FONT, 10),
+                  command=self.on_open_folder).pack(side="left", padx=(4, 0))
+
+        # ── リストボックス（残り領域を占有）──────────────────────────────────
         lb_f = tk.Frame(lf)
         lb_f.pack(expand=True, fill="both", pady=(2, 4))
 
@@ -323,23 +342,6 @@ class App:
         self._context_menu.add_command(
             label="画像をコピー", command=self._copy_selected_image
         )
-
-        btn_f = tk.Frame(lf)
-        btn_f.pack(fill="x")
-        tk.Button(btn_f, text="削除", font=(_FONT, 10), width=8,
-                  command=self.on_delete).pack(side="left")
-        tk.Button(btn_f, text="フォルダを開く", font=(_FONT, 10),
-                  command=self.on_open_folder).pack(side="left", padx=(4, 0))
-
-        pdf_f = tk.Frame(lf)
-        pdf_f.pack(fill="x", pady=(4, 0))
-        tk.Button(pdf_f, text="選択してPDF出力", font=(_FONT, 9),
-                  command=self.on_export_pdf).pack(side="left", fill="x", expand=True)
-        tk.Label(pdf_f, text="列:", font=(_FONT, 9), fg="gray").pack(side="left", padx=(6, 2))
-        self._pdf_cols_var = tk.IntVar(value=self.settings.get("pdf_cols", 3))
-        self._pdf_cols_var.trace_add("write", self._on_pdf_cols_change)
-        tk.Spinbox(pdf_f, textvariable=self._pdf_cols_var,
-                   from_=1, to=6, width=3, font=(_FONT, 13)).pack(side="left")
 
         ttk.Separator(self.root, orient="vertical").pack(side="left", fill="y")
 
