@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import tkinter as tk
+import tomllib
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -20,6 +21,17 @@ from core import (
     save_settings,
 )
 from generators import generate_barcode_file, generate_pdf_grid, generate_qr
+
+def _read_version() -> str:
+    """pyproject.toml からバージョンを読む。開発時・PyInstaller exe 時いずれも対応。"""
+    p = Path(__file__).parent / "pyproject.toml"
+    try:
+        return tomllib.loads(p.read_text(encoding="utf-8"))["project"]["version"]
+    except Exception:
+        return "unknown"
+
+
+_VERSION = _read_version()
 
 _FONT = "Meiryo"
 LEFT_W = 310        # 左パネル固定幅 (px)
@@ -118,7 +130,7 @@ class App:
         self.root = root
         self.root.title("QR & バーコード 生成ツール")
         self.root.minsize(WIN_MIN_W, WIN_MIN_H)
-        self.root.geometry("730x580")
+        self.root.geometry("730x490")
 
         SAVE_DIR.mkdir(exist_ok=True)
         self.records = self._load_metadata_safe()
@@ -160,7 +172,7 @@ class App:
     def _show_about(self) -> None:
         messagebox.showinfo(
             "バージョン情報",
-            "QR & バーコード 生成ツール\nバージョン 1.4.0",
+            f"QR & バーコード 生成ツール\nバージョン {_VERSION}",
             parent=self.root,
         )
 
