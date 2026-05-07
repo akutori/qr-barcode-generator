@@ -1,6 +1,6 @@
 [project]
 name = "qr-barcode-gui"
-version = "1.7.0"
+version = "1.7.1"
 description = "QR コード / バーコード生成 GUI ツール"
 readme = "README.md"
 requires-python = ">=3.13"
