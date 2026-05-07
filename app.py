@@ -55,21 +55,41 @@ def show_enlarged(record: dict, root: tk.Tk) -> None:
 
     top = tk.Toplevel(root)
     top.title("拡大表示")
-    top.geometry("260x360")    # 初期サイズ: 旧860x740の約30%
-    top.minsize(180, 160)
+    top.geometry("320x500")
+    top.minsize(220, 320)
     top.resizable(True, True)
+
+    # ── ボタン → info → 画像 の順に bottom から積む ──────────────────────────
+    # 先に bottom 側を確保することで、画像が expand しても閉じるボタンが常に見える
+    btn_f = tk.Frame(top)
+    btn_f.pack(side="bottom", fill="x", padx=6, pady=(0, 6))
+    tk.Button(btn_f, text="閉じる", width=10, command=top.destroy,
+              font=(_FONT, 10)).pack(pady=3)
+
+    info = tk.Frame(top)
+    info.pack(side="bottom", fill="x", padx=6, pady=(0, 2))
+
+    tk.Label(info, text=f"保存先: {record['path']}",
+             font=(_FONT, 8), fg="gray", anchor="w", justify="left").pack(fill="x")
+    tk.Label(info, text=f"[{record['type']}]",
+             font=(_FONT, 10, "bold"), anchor="w").pack(fill="x")
+
+    # テキスト内容: 4行固定でスクロール可能（読み取り専用）
+    txt_f = tk.Frame(info)
+    txt_f.pack(fill="x", pady=(1, 2))
+    _sb = tk.Scrollbar(txt_f, orient="vertical")
+    _sb.pack(side="right", fill="y")
+    _txt = tk.Text(txt_f, height=3, font=(_FONT, 10),
+                   yscrollcommand=_sb.set, wrap="word",
+                   relief="flat", bd=0, bg=top.cget("bg"),
+                   state="normal")
+    _txt.insert("1.0", record["text"])
+    _txt.config(state="disabled")
+    _txt.pack(side="left", fill="x", expand=True)
+    _sb.config(command=_txt.yview)
 
     img_label = tk.Label(top, bg="white", anchor="center")
     img_label.pack(expand=True, fill="both", padx=6, pady=(6, 0))
-
-    info = tk.Frame(top)
-    info.pack(fill="x", padx=6, pady=(3, 6))
-    tk.Label(info, text=f"[{record['type']}]  {record['text']}",
-             font=(_FONT, 10, "bold")).pack()
-    tk.Label(info, text=f"保存先: {record['path']}",
-             font=(_FONT, 8), fg="gray").pack()
-    tk.Button(info, text="閉じる", width=10, command=top.destroy,
-              font=(_FONT, 10)).pack(pady=3)
 
     _photo = [None]
 
@@ -107,7 +127,6 @@ class App:
         self._photo = None  # ImageTk.PhotoImage の GC 防止
         self._filtered_indices: list[int] = []
         self._current_rec_idx: int | None = None
-        self._desc_showing_placeholder: bool = False
         self._tooltip_win: tk.Toplevel | None = None
         self._tooltip_after: str | None = None
         self._tooltip_rec_idx: int = -1
@@ -337,17 +356,17 @@ class App:
 
         desc_outer = tk.Frame(rf)
         desc_outer.pack(side="bottom", fill="x", pady=(2, 0))
-        tk.Label(desc_outer, text="Enter で確定 ／ PDF では25文字まで表示",
-                 font=(_FONT, 8), fg="gray", anchor="e").pack(fill="x")
         desc_row = tk.Frame(desc_outer)
         desc_row.pack(fill="x")
-        tk.Label(desc_row, text="説明:", font=(_FONT, 10)).pack(side="left")
+        _desc_lbl = tk.Label(desc_row, text="説明:", font=(_FONT, 10), cursor="question_arrow")
+        _desc_lbl.pack(side="left")
+        _desc_lbl.bind("<Enter>", self._on_desc_label_enter)
+        _desc_lbl.bind("<Leave>", lambda e: self._hide_tooltip())
         self._desc_var = tk.StringVar()
         self._desc_entry = tk.Entry(desc_row, textvariable=self._desc_var, font=(_FONT, 10))
         self._desc_entry.pack(side="left", fill="x", expand=True, padx=(4, 4))
-        self._desc_entry.bind("<FocusIn>", lambda e: self._on_desc_focus_in())
         self._desc_entry.bind("<FocusOut>", lambda e: self._save_description())
-        self._desc_entry.bind("<Return>", lambda e: self._save_description())
+        self._desc_entry.bind("<Return>",   lambda e: self._on_desc_return())
         tk.Button(desc_row, text="↩", font=(_FONT, 9), width=3,
                   command=self._reset_description).pack(side="left")
 
@@ -377,30 +396,23 @@ class App:
         for i in self._filtered_indices:
             self.listbox.insert(tk.END, labels[i])
 
-    def _show_record(self, rec: dict) -> None:
-        self.current_path = rec["path"]
-        self._current_rec_idx = next(
-            (i for i, r in enumerate(self.records) if r is rec), None
-        )
-        # 複数行テキストは先頭 3 行のみ表示（それ以降は行数を表示）
+    def _refresh_detail_label(self, rec: dict) -> None:
+        """detail_label をレコード内容で更新する（説明欄フォーカス復帰時にも使用）。"""
         lines = rec["text"].split("\n")
         _MAX_PREVIEW_LINES = 3
         if len(lines) > _MAX_PREVIEW_LINES:
             display = "\n".join(lines[:_MAX_PREVIEW_LINES]) + f"\n … (+{len(lines) - _MAX_PREVIEW_LINES}行)"
         else:
             display = rec["text"]
-        self.detail_label.config(
-            text=f"[{rec['type']}]  {display}\n{rec['path']}"
+        self.detail_label.config(text=f"[{rec['type']}]  {display}\n{rec['path']}")
+
+    def _show_record(self, rec: dict) -> None:
+        self.current_path = rec["path"]
+        self._current_rec_idx = next(
+            (i for i, r in enumerate(self.records) if r is rec), None
         )
-        desc = rec.get("description", "")
-        if desc:
-            self._desc_entry.config(fg="black")
-            self._desc_var.set(desc)
-            self._desc_showing_placeholder = False
-        else:
-            self._desc_entry.config(fg="gray")
-            self._desc_var.set(rec["text"].split("\n")[0])
-            self._desc_showing_placeholder = True
+        self._refresh_detail_label(rec)
+        self._desc_var.set(rec.get("description", ""))
         self._redraw_preview()
 
     def _redraw_preview(self) -> None:
@@ -497,24 +509,30 @@ class App:
         self.listbox.selection_set(idx)
         self._context_menu.tk_popup(event.x_root, event.y_root)
 
-    def _on_desc_focus_in(self) -> None:
-        if self._desc_showing_placeholder:
-            self._desc_var.set("")
-            self._desc_entry.config(fg="black")
-            self._desc_showing_placeholder = False
+    def _on_desc_label_enter(self, event: tk.Event) -> None:
+        """「説明:」ラベルホバー時: 生成済一覧と同じポップアップで説明を表示する。"""
+        x, y = event.x_root + 14, event.y_root + 14
+        self._hide_tooltip()
+        self._tooltip_after = self.root.after(
+            300,
+            lambda: self._show_tooltip(
+                "一覧・PDF に表示される独自の説明文を入力できます\n"
+                "Enter で確定  ／  ↩ ボタンで削除\n"
+                "（PDF では先頭25文字まで表示）",
+                x, y,
+            ),
+        )
+
+    def _on_desc_return(self) -> None:
+        """Enter キー確定: 保存してフォーカスを外す。"""
+        self._save_description()
+        self.root.focus_set()
 
     def _save_description(self) -> None:
         if self._current_rec_idx is None:
             return
-        if self._desc_showing_placeholder:
-            return
         rec = self.records[self._current_rec_idx]
         new_desc = self._desc_var.get().strip()
-        if not new_desc:
-            self._desc_entry.config(fg="gray")
-            self._desc_var.set(rec["text"].split("\n")[0])
-            self._desc_showing_placeholder = True
-            new_desc = ""
         if rec.get("description", "") != new_desc:
             rec["description"] = new_desc
             save_metadata(self.records, METADATA_FILE)
@@ -524,9 +542,7 @@ class App:
         if self._current_rec_idx is None:
             return
         rec = self.records[self._current_rec_idx]
-        self._desc_entry.config(fg="gray")
-        self._desc_var.set(rec["text"].split("\n")[0])
-        self._desc_showing_placeholder = True
+        self._desc_var.set("")
         if rec.get("description", "") != "":
             rec["description"] = ""
             save_metadata(self.records, METADATA_FILE)
@@ -664,8 +680,6 @@ class App:
             self._photo = None
             self.detail_label.config(text="")
             self._desc_var.set("")
-            self._desc_entry.config(fg="black")
-            self._desc_showing_placeholder = False
             self._current_rec_idx = None
             self.current_path = None
 
