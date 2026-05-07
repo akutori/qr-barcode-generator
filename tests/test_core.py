@@ -216,6 +216,28 @@ class TestListLabelsWithStatus:
                     "path": str(tmp_path / "missing.png"), "error_correction": "H"}]
         assert list_labels_with_status(records) == ["⚠[QR:H]  hello"]
 
+    def test_カスタムdescriptionはサフィックスとして表示される(self, tmp_path):
+        img = tmp_path / "qr.png"
+        img.write_bytes(b"dummy")
+        records = [{"text": "https://example.com", "type": "QR",
+                    "path": str(img), "description": "商品A"}]
+        assert list_labels_with_status(records) == ["[QR]  https://example.com  (商品A)"]
+
+    def test_descriptionがテキスト先頭行と同じならサフィックスなし(self, tmp_path):
+        """リセット後（description == first line）はデフォルト表示と変わらない"""
+        img = tmp_path / "qr.png"
+        img.write_bytes(b"dummy")
+        records = [{"text": "hello", "type": "QR",
+                    "path": str(img), "description": "hello"}]
+        assert list_labels_with_status(records) == ["[QR]  hello"]
+
+    def test_descriptionが空文字列ならサフィックスなし(self, tmp_path):
+        img = tmp_path / "qr.png"
+        img.write_bytes(b"dummy")
+        records = [{"text": "hello", "type": "QR",
+                    "path": str(img), "description": ""}]
+        assert list_labels_with_status(records) == ["[QR]  hello"]
+
 
 class TestFindIndex:
     def test_一致するラベルのインデックスを返す(self):
