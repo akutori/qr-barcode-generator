@@ -221,7 +221,7 @@ wheels = [
 
 [[package]]
 name = "qr-barcode-gui"
-version = "1.7.0"
+version = "1.7.1"
 source = { virtual = "." }
 dependencies = [
     { name = "python-barcode" },
