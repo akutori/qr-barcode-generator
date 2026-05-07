@@ -24,7 +24,7 @@ from generators import generate_barcode_file, generate_pdf_grid, generate_qr
 _FONT = "Meiryo"
 LEFT_W = 310        # 左パネル固定幅 (px)
 WIN_MIN_W = 560
-WIN_MIN_H = 380
+WIN_MIN_H = 420
 
 
 def _app_dir() -> Path:
@@ -98,7 +98,7 @@ class App:
         self.root = root
         self.root.title("QR & バーコード 生成ツール")
         self.root.minsize(WIN_MIN_W, WIN_MIN_H)
-        self.root.geometry("760x580")
+        self.root.geometry("760x650")
 
         SAVE_DIR.mkdir(exist_ok=True)
         self.records = self._load_metadata_safe()
@@ -106,6 +106,7 @@ class App:
         self.current_path: str | None = None
         self._photo = None  # ImageTk.PhotoImage の GC 防止
         self._filtered_indices: list[int] = []
+        self._current_rec_idx: int | None = None
         self._tooltip_win: tk.Toplevel | None = None
         self._tooltip_after: str | None = None
         self._tooltip_rec_idx: int = -1
@@ -328,10 +329,25 @@ class App:
         tk.Label(rf, text="プレビュー", font=(_FONT, 11, "bold"),
                  anchor="w").pack(fill="x")
 
-        # detail_label を先に bottom へ固定（preview_label が expand しても隠れなくなる）
+        # detail_label → 説明フィールド → preview_label の順で bottom から積む
         self.detail_label = tk.Label(rf, text="", font=(_FONT, 10),
                                       anchor="w", justify="left")
         self.detail_label.pack(side="bottom", fill="x", pady=(4, 0))
+
+        desc_outer = tk.Frame(rf)
+        desc_outer.pack(side="bottom", fill="x", pady=(2, 0))
+        tk.Label(desc_outer, text="PDF では25文字まで表示",
+                 font=(_FONT, 8), fg="gray", anchor="e").pack(fill="x")
+        desc_row = tk.Frame(desc_outer)
+        desc_row.pack(fill="x")
+        tk.Label(desc_row, text="説明:", font=(_FONT, 10)).pack(side="left")
+        self._desc_var = tk.StringVar()
+        self._desc_entry = tk.Entry(desc_row, textvariable=self._desc_var, font=(_FONT, 10))
+        self._desc_entry.pack(side="left", fill="x", expand=True, padx=(4, 4))
+        self._desc_entry.bind("<FocusOut>", lambda e: self._save_description())
+        self._desc_entry.bind("<Return>", lambda e: self._save_description())
+        tk.Button(desc_row, text="↩", font=(_FONT, 9), width=3,
+                  command=self._reset_description).pack(side="left")
 
         self.preview_label = tk.Label(rf, bg="white", anchor="center")
         self.preview_label.pack(expand=True, fill="both")
@@ -344,7 +360,7 @@ class App:
         if query:
             self._filtered_indices = [
                 i for i, r in enumerate(self.records)
-                if query in r["text"].lower()
+                if query in r["text"].lower() or query in r.get("description", "").lower()
             ]
         else:
             self._filtered_indices = list(range(len(self.records)))
@@ -361,6 +377,9 @@ class App:
 
     def _show_record(self, rec: dict) -> None:
         self.current_path = rec["path"]
+        self._current_rec_idx = next(
+            (i for i, r in enumerate(self.records) if r is rec), None
+        )
         # 複数行テキストは先頭 3 行のみ表示（それ以降は行数を表示）
         lines = rec["text"].split("\n")
         _MAX_PREVIEW_LINES = 3
@@ -371,6 +390,7 @@ class App:
         self.detail_label.config(
             text=f"[{rec['type']}]  {display}\n{rec['path']}"
         )
+        self._desc_var.set(rec.get("description", rec["text"].split("\n")[0]))
         self._redraw_preview()
 
     def _redraw_preview(self) -> None:
@@ -465,6 +485,23 @@ class App:
         self.listbox.selection_clear(0, tk.END)
         self.listbox.selection_set(idx)
         self._context_menu.tk_popup(event.x_root, event.y_root)
+
+    def _save_description(self) -> None:
+        if self._current_rec_idx is None:
+            return
+        new_desc = self._desc_var.get().strip()
+        rec = self.records[self._current_rec_idx]
+        if rec.get("description", "") != new_desc:
+            rec["description"] = new_desc
+            save_metadata(self.records, METADATA_FILE)
+            self._populate_list()
+
+    def _reset_description(self) -> None:
+        if self._current_rec_idx is None:
+            return
+        default = self.records[self._current_rec_idx]["text"].split("\n")[0]
+        self._desc_var.set(default)
+        self._save_description()
 
     def _copy_selected_text(self) -> None:
         sel = self.listbox.curselection()
@@ -596,6 +633,8 @@ class App:
             self.preview_label.config(image="")
             self._photo = None
             self.detail_label.config(text="")
+            self._desc_var.set("")
+            self._current_rec_idx = None
             self.current_path = None
 
     def on_export_pdf(self) -> None:
