@@ -337,7 +337,7 @@ class App:
 
         desc_outer = tk.Frame(rf)
         desc_outer.pack(side="bottom", fill="x", pady=(2, 0))
-        tk.Label(desc_outer, text="PDF では25文字まで表示",
+        tk.Label(desc_outer, text="Enter で確定 ／ PDF では25文字まで表示",
                  font=(_FONT, 8), fg="gray", anchor="e").pack(fill="x")
         desc_row = tk.Frame(desc_outer)
         desc_row.pack(fill="x")
@@ -480,6 +480,7 @@ class App:
         sel = self.listbox.curselection()
         if not sel or sel[-1] >= len(self._filtered_indices):
             return
+        self._save_description()
         self._show_record(self.records[self._rec_idx(sel[-1])])
 
     def _on_list_double(self, _: tk.Event) -> None:
@@ -597,6 +598,7 @@ class App:
         return result[0]
 
     def on_generate(self) -> None:
+        self._save_description()
         code_type = self.type_var.get()
         if code_type == "QR":
             text = self.qr_text.get("1.0", "end-1c").strip()
