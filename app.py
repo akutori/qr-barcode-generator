@@ -107,6 +107,7 @@ class App:
         self._photo = None  # ImageTk.PhotoImage の GC 防止
         self._filtered_indices: list[int] = []
         self._current_rec_idx: int | None = None
+        self._desc_showing_placeholder: bool = False
         self._tooltip_win: tk.Toplevel | None = None
         self._tooltip_after: str | None = None
         self._tooltip_rec_idx: int = -1
@@ -344,6 +345,7 @@ class App:
         self._desc_var = tk.StringVar()
         self._desc_entry = tk.Entry(desc_row, textvariable=self._desc_var, font=(_FONT, 10))
         self._desc_entry.pack(side="left", fill="x", expand=True, padx=(4, 4))
+        self._desc_entry.bind("<FocusIn>", lambda e: self._on_desc_focus_in())
         self._desc_entry.bind("<FocusOut>", lambda e: self._save_description())
         self._desc_entry.bind("<Return>", lambda e: self._save_description())
         tk.Button(desc_row, text="↩", font=(_FONT, 9), width=3,
@@ -390,7 +392,15 @@ class App:
         self.detail_label.config(
             text=f"[{rec['type']}]  {display}\n{rec['path']}"
         )
-        self._desc_var.set(rec.get("description", rec["text"].split("\n")[0]))
+        desc = rec.get("description", "")
+        if desc:
+            self._desc_entry.config(fg="black")
+            self._desc_var.set(desc)
+            self._desc_showing_placeholder = False
+        else:
+            self._desc_entry.config(fg="gray")
+            self._desc_var.set(rec["text"].split("\n")[0])
+            self._desc_showing_placeholder = True
         self._redraw_preview()
 
     def _redraw_preview(self) -> None:
@@ -486,11 +496,24 @@ class App:
         self.listbox.selection_set(idx)
         self._context_menu.tk_popup(event.x_root, event.y_root)
 
+    def _on_desc_focus_in(self) -> None:
+        if self._desc_showing_placeholder:
+            self._desc_var.set("")
+            self._desc_entry.config(fg="black")
+            self._desc_showing_placeholder = False
+
     def _save_description(self) -> None:
         if self._current_rec_idx is None:
             return
-        new_desc = self._desc_var.get().strip()
+        if self._desc_showing_placeholder:
+            return
         rec = self.records[self._current_rec_idx]
+        new_desc = self._desc_var.get().strip()
+        if not new_desc:
+            self._desc_entry.config(fg="gray")
+            self._desc_var.set(rec["text"].split("\n")[0])
+            self._desc_showing_placeholder = True
+            new_desc = ""
         if rec.get("description", "") != new_desc:
             rec["description"] = new_desc
             save_metadata(self.records, METADATA_FILE)
@@ -499,9 +522,14 @@ class App:
     def _reset_description(self) -> None:
         if self._current_rec_idx is None:
             return
-        default = self.records[self._current_rec_idx]["text"].split("\n")[0]
-        self._desc_var.set(default)
-        self._save_description()
+        rec = self.records[self._current_rec_idx]
+        self._desc_entry.config(fg="gray")
+        self._desc_var.set(rec["text"].split("\n")[0])
+        self._desc_showing_placeholder = True
+        if rec.get("description", "") != "":
+            rec["description"] = ""
+            save_metadata(self.records, METADATA_FILE)
+            self._populate_list()
 
     def _copy_selected_text(self) -> None:
         sel = self.listbox.curselection()
@@ -634,6 +662,8 @@ class App:
             self._photo = None
             self.detail_label.config(text="")
             self._desc_var.set("")
+            self._desc_entry.config(fg="black")
+            self._desc_showing_placeholder = False
             self._current_rec_idx = None
             self.current_path = None
 
