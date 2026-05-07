@@ -49,17 +49,20 @@ uv run pytest
 uv run python create_icon.py
 
 # バイナリのビルド
-uv run pyinstaller --onefile --noconsole --add-data "core.py;." --add-data "assets/icon.ico;assets" --icon assets/icon.ico --name QR-Barcode-GUI main.py
+uv run pyinstaller --onefile --noconsole --add-data "core.py;." --add-data "assets/icon.ico;assets" --add-data "pyproject.toml;." --icon assets/icon.ico --name QR-Barcode-GUI main.py
 ```
 
 ## プロジェクト構成
 
 ```
 QR-Barcode-GUI/
-├── main.py          # GUI (tkinter)
-├── core.py          # 純粋関数 (生成・メタデータ管理)
+├── main.py          # エントリポイント
+├── app.py           # GUI (tkinter)
+├── core.py          # メタデータ I/O・画像ユーティリティ・ラベル処理
+├── generators.py    # QR・バーコード・PDF 生成ロジック
 ├── tests/
-│   └── test_core.py # ユニットテスト (37 件)
+│   ├── test_core.py       # ユニットテスト
+│   └── test_generators.py # ユニットテスト
 ├── pyproject.toml
 └── generated/       # 生成画像の保存先 (実行時に自動作成)
 ```
