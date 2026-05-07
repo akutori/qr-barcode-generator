@@ -160,26 +160,6 @@ class TestFitImage:
 # ラベルユーティリティ
 # ---------------------------------------------------------------------------
 
-class TestListLabels:
-    def test_空リストは空リストを返す(self):
-        assert list_labels([]) == []
-
-    def test_型とテキストが角括弧形式でフォーマットされる(self):
-        records = [
-            {"text": "hello", "type": "QR", "path": "..."},
-            {"text": "world", "type": "Barcode", "path": "..."},
-        ]
-        assert list_labels(records) == ["[QR]  hello", "[Barcode]  world"]
-
-    def test_QRに誤り訂正レベルが含まれる場合は角括弧内に表示される(self):
-        records = [{"text": "hello", "type": "QR", "path": "...", "error_correction": "H"}]
-        assert list_labels(records) == ["[QR:H]  hello"]
-
-    def test_誤り訂正レベルのないQRは従来フォーマットで返す(self):
-        records = [{"text": "hello", "type": "QR", "path": "..."}]
-        assert list_labels(records) == ["[QR]  hello"]
-
-
 class TestListLabelsWithStatus:
     def test_ファイルが存在するレコードはそのまま返す(self, tmp_path):
         img = tmp_path / "qr.png"
@@ -216,27 +196,59 @@ class TestListLabelsWithStatus:
                     "path": str(tmp_path / "missing.png"), "error_correction": "H"}]
         assert list_labels_with_status(records) == ["⚠[QR:H]  hello"]
 
-    def test_カスタムdescriptionはサフィックスとして表示される(self, tmp_path):
+    def test_descriptionがある場合はえんぴつプレフィックスと説明文で表示される(self, tmp_path):
         img = tmp_path / "qr.png"
         img.write_bytes(b"dummy")
         records = [{"text": "https://example.com", "type": "QR",
                     "path": str(img), "description": "商品A"}]
-        assert list_labels_with_status(records) == ["[QR]  https://example.com  (商品A)"]
+        assert list_labels_with_status(records) == ["✎[QR]  商品A"]
 
-    def test_descriptionがテキスト先頭行と同じならサフィックスなし(self, tmp_path):
-        """リセット後（description == first line）はデフォルト表示と変わらない"""
-        img = tmp_path / "qr.png"
-        img.write_bytes(b"dummy")
+    def test_descriptionがある場合にファイル欠損なら両方のプレフィックスが付く(self, tmp_path):
         records = [{"text": "hello", "type": "QR",
-                    "path": str(img), "description": "hello"}]
-        assert list_labels_with_status(records) == ["[QR]  hello"]
+                    "path": str(tmp_path / "missing.png"), "description": "説明"}]
+        assert list_labels_with_status(records) == ["⚠✎[QR]  説明"]
 
-    def test_descriptionが空文字列ならサフィックスなし(self, tmp_path):
+    def test_descriptionが空文字列ならプレフィックスなしでテキスト先頭行を表示(self, tmp_path):
         img = tmp_path / "qr.png"
         img.write_bytes(b"dummy")
         records = [{"text": "hello", "type": "QR",
                     "path": str(img), "description": ""}]
         assert list_labels_with_status(records) == ["[QR]  hello"]
+
+    def test_改行付きテキストは先頭行のみ表示される(self, tmp_path):
+        img = tmp_path / "qr.png"
+        img.write_bytes(b"dummy")
+        records = [{"text": "line1\nline2\nline3", "type": "QR", "path": str(img)}]
+        assert list_labels_with_status(records) == ["[QR]  line1"]
+
+
+class TestListLabels:
+    def test_空リストは空リストを返す(self):
+        assert list_labels([]) == []
+
+    def test_型とテキストが角括弧形式でフォーマットされる(self):
+        records = [
+            {"text": "hello", "type": "QR", "path": "..."},
+            {"text": "world", "type": "Barcode", "path": "..."},
+        ]
+        assert list_labels(records) == ["[QR]  hello", "[Barcode]  world"]
+
+    def test_QRに誤り訂正レベルが含まれる場合は角括弧内に表示される(self):
+        records = [{"text": "hello", "type": "QR", "path": "...", "error_correction": "H"}]
+        assert list_labels(records) == ["[QR:H]  hello"]
+
+    def test_誤り訂正レベルのないQRは従来フォーマットで返す(self):
+        records = [{"text": "hello", "type": "QR", "path": "..."}]
+        assert list_labels(records) == ["[QR]  hello"]
+
+    def test_descriptionがある場合はえんぴつプレフィックスと説明文で表示される(self):
+        records = [{"text": "https://example.com", "type": "QR",
+                    "path": "...", "description": "商品A"}]
+        assert list_labels(records) == ["✎[QR]  商品A"]
+
+    def test_改行付きテキストは先頭行のみ表示される(self):
+        records = [{"text": "line1\nline2", "type": "QR", "path": "..."}]
+        assert list_labels(records) == ["[QR]  line1"]
 
 
 class TestFindIndex:
@@ -254,6 +266,19 @@ class TestFindIndex:
 
     def test_空リストはマイナス1を返す(self):
         assert find_index("[QR]  hello", []) == -1
+
+    def test_descriptionありのラベルで検索できる(self):
+        records = [{"text": "https://example.com", "type": "QR",
+                    "path": "...", "description": "商品A"}]
+        assert find_index("✎[QR]  商品A", records) == 0
+
+    def test_ファイル欠損プレフィックス付きでも検索できる(self):
+        records = [{"text": "hello", "type": "QR", "path": "..."}]
+        assert find_index("⚠[QR]  hello", records) == 0
+
+    def test_description付きファイル欠損プレフィックスでも検索できる(self):
+        records = [{"text": "hello", "type": "QR", "path": "...", "description": "説明"}]
+        assert find_index("⚠✎[QR]  説明", records) == 0
 
 
 # ---------------------------------------------------------------------------

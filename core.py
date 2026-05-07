@@ -84,25 +84,35 @@ def has_duplicate(
     return False
 
 
+def _display_text(r: dict) -> str:
+    """一覧に表示するテキストを返す。説明があれば説明、なければ先頭行。"""
+    return r.get("description") or r["text"].split("\n")[0]
+
+
+def _item_label(r: dict) -> str:
+    """レコード 1 件分の一覧ラベルを生成する（ファイル有無チェックなし）。
+    説明が設定されている場合は ✎ プレフィックスを付ける。
+    """
+    prefix = "✎" if r.get("description") else ""
+    return f"{prefix}[{_type_label(r)}]  {_display_text(r)}"
+
+
 def list_labels(records: list[dict]) -> list[str]:
-    return [f"[{_type_label(r)}]  {r['text']}" for r in records]
+    return [_item_label(r) for r in records]
 
 
 def list_labels_with_status(records: list[dict]) -> list[str]:
     """ファイルが欠損しているレコードには先頭に ⚠ を付ける。"""
     labels = []
     for r in records:
-        prefix = "" if Path(r["path"]).exists() else "⚠"
-        desc = r.get("description", "")
-        default = r["text"].split("\n")[0]
-        desc_suffix = f"  ({desc})" if desc and desc != default else ""
-        labels.append(f"{prefix}[{_type_label(r)}]  {r['text']}{desc_suffix}")
+        file_prefix = "" if Path(r["path"]).exists() else "⚠"
+        labels.append(f"{file_prefix}{_item_label(r)}")
     return labels
 
 
 def find_index(label: str, records: list[dict]) -> int:
     for i, r in enumerate(records):
-        if f"[{_type_label(r)}]  {r['text']}" == label:
+        if _item_label(r) == label or f"⚠{_item_label(r)}" == label:
             return i
     return -1
 

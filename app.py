@@ -453,8 +453,17 @@ class App:
         self._tooltip_rec_idx = rec_idx
         x, y = event.x_root + 14, event.y_root + 14
         self._tooltip_after = self.root.after(
-            400, lambda: self._show_tooltip(self.records[rec_idx]["text"], x, y)
+            400, lambda: self._show_list_tooltip(self.records[rec_idx], x, y)
         )
+
+    def _show_list_tooltip(self, rec: dict, x: int, y: int) -> None:
+        """生成済一覧ホバー時のツールチップ。説明があれば説明＋元テキストを、なければ元テキストを表示。"""
+        desc = rec.get("description", "")
+        if desc:
+            text = f"{desc}\n{'─' * 28}\n{rec['text']}"
+        else:
+            text = rec["text"]
+        self._show_tooltip(text, x, y)
 
     def _show_tooltip(self, text: str, x: int, y: int) -> None:
         lines = text.split("\n")
