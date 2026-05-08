@@ -467,6 +467,7 @@ class App:
     # ── UI 構築 ────────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
+        ttk.Style().configure("Treeview", rowheight=24)
         lf = tk.Frame(self.root, width=LEFT_W)
         lf.pack(side="left", fill="y", padx=(8, 4), pady=8)
         lf.pack_propagate(False)
