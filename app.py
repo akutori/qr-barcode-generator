@@ -20,6 +20,16 @@ from core import (
     save_metadata,
     save_settings,
 )
+from csv_import import (
+    ImportRow,
+    ParseError,
+    RowStatus,
+    format_ec_for_display,
+    format_text_for_display,
+    generate_template,
+    parse_csv,
+    validate_all,
+)
 from generators import generate_barcode_file, generate_pdf_grid, generate_qr
 
 def _read_version() -> str:
@@ -155,6 +165,7 @@ class App:
         menubar = tk.Menu(self.root)
 
         file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(label="CSVインポート", command=self._open_import_dialog)
         file_menu.add_command(label="フォルダを開く", command=self.on_open_folder)
         file_menu.add_separator()
         file_menu.add_command(label="終了", command=self.root.quit)
@@ -195,6 +206,209 @@ class App:
             f"QR & バーコード 生成ツール\nバージョン {_VERSION}",
             parent=self.root,
         )
+
+    # ── CSVインポートダイアログ ────────────────────────────────────────────────
+
+    def _open_import_dialog(self) -> None:
+        if hasattr(self, "_import_dlg") and self._import_dlg.winfo_exists():
+            self._import_dlg.lift()
+            return
+        dlg = tk.Toplevel(self.root)
+        dlg.title("CSVインポート")
+        dlg.geometry("720x500")
+        dlg.minsize(600, 400)
+        dlg.resizable(True, True)
+        dlg.transient(self.root)
+        self._import_dlg = dlg
+
+        _rows: list[ImportRow] = []
+        _dup_mode = tk.StringVar(value="skip")
+
+        # ── ボタン行（上部）──────────────────────────────────────────────────
+        top_f = tk.Frame(dlg)
+        top_f.pack(fill="x", padx=8, pady=(8, 4))
+
+        def _save_template() -> None:
+            path = filedialog.asksaveasfilename(
+                parent=dlg, defaultextension=".csv",
+                filetypes=[("CSV ファイル", "*.csv")],
+                title="テンプレートを保存",
+                initialfile="import_template.csv",
+            )
+            if not path:
+                return
+            try:
+                Path(path).write_text(generate_template(), encoding="utf-8-sig")
+                if sys.platform == "win32":
+                    os.startfile(path)
+                elif sys.platform == "darwin":
+                    subprocess.run(["open", path])
+                else:
+                    subprocess.run(["xdg-open", path])
+            except OSError as e:
+                messagebox.showerror("エラー", f"保存に失敗しました:\n{e}", parent=dlg)
+
+        tk.Button(top_f, text="テンプレートを保存して開く", font=(_FONT, 9),
+                  command=_save_template).pack(side="left")
+
+        def _select_file() -> None:
+            path = filedialog.askopenfilename(
+                parent=dlg,
+                filetypes=[("CSV ファイル", "*.csv"), ("すべてのファイル", "*.*")],
+                title="CSVファイルを選択",
+            )
+            if not path:
+                return
+            try:
+                parsed = parse_csv(Path(path))
+            except ParseError as e:
+                messagebox.showerror("CSVエラー", str(e), parent=dlg)
+                return
+            validated = validate_all(parsed, self.records)
+            _rows.clear()
+            _rows.extend(validated)
+            _refresh_preview()
+
+        tk.Button(top_f, text="CSVファイルを選択...", font=(_FONT, 9),
+                  command=_select_file).pack(side="left", padx=(6, 0))
+
+        # ── 下部ボタン（bottom から先に確保してウィンドウ縮小で潰れないようにする）──
+        btn_f = tk.Frame(dlg)
+        btn_f.pack(side="bottom", fill="x", padx=8, pady=(0, 8))
+        tk.Button(btn_f, text="キャンセル", font=(_FONT, 10),
+                  command=dlg.destroy).pack(side="right", padx=(4, 0))
+        import_btn = tk.Button(btn_f, text="インポート開始", font=(_FONT, 10, "bold"),
+                               state="disabled", command=lambda: _do_import())
+        import_btn.pack(side="right")
+
+        # ── 重複オプション ───────────────────────────────────────────────────
+        dup_f = tk.Frame(dlg)
+        dup_f.pack(side="bottom", fill="x", padx=8, pady=(2, 4))
+        tk.Label(dup_f, text="重複時:", font=(_FONT, 9)).pack(side="left")
+        tk.Radiobutton(dup_f, text="スキップ", variable=_dup_mode,
+                       value="skip", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
+        tk.Radiobutton(dup_f, text="上書き", variable=_dup_mode,
+                       value="overwrite", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
+        tk.Radiobutton(dup_f, text="そのまま追加", variable=_dup_mode,
+                       value="add", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
+
+        # ── サマリーラベル ───────────────────────────────────────────────────
+        summary_var = tk.StringVar(value="CSVファイルを選択してください。")
+        tk.Label(dlg, textvariable=summary_var, font=(_FONT, 9),
+                 anchor="w").pack(side="bottom", fill="x", padx=8)
+
+        # ── ヒント行 ─────────────────────────────────────────────────────────
+        hint_f = tk.Frame(dlg)
+        hint_f.pack(fill="x", padx=8, pady=(0, 2))
+        tk.Label(hint_f,
+                 text="種別: QR / Barcode  ｜  誤り訂正レベル: L / M / Q / H（空欄=M、Barcode 時は無視）",
+                 font=(_FONT, 8), fg="#666666", anchor="w").pack(fill="x")
+
+        # ── プレビュー（Treeview）────────────────────────────────────────────
+        cols = ("status", "type", "text", "description", "ec", "error")
+        tree_f = tk.Frame(dlg)
+        tree_f.pack(fill="both", expand=True, padx=8, pady=4)
+
+        vsb = tk.Scrollbar(tree_f, orient="vertical")
+        vsb.pack(side="right", fill="y")
+        hsb = tk.Scrollbar(tree_f, orient="horizontal")
+        hsb.pack(side="bottom", fill="x")
+        tree = ttk.Treeview(tree_f, columns=cols, show="headings",
+                            yscrollcommand=vsb.set, xscrollcommand=hsb.set, height=12)
+        vsb.config(command=tree.yview)
+        hsb.config(command=tree.xview)
+
+        tree.heading("status", text="状態")
+        tree.heading("type",   text="種別")
+        tree.heading("text",   text="テキスト")
+        tree.heading("description", text="説明")
+        tree.heading("ec",     text="誤り訂正")
+        tree.heading("error",  text="エラー詳細")
+        tree.column("status", width=50,  stretch=False, anchor="center")
+        tree.column("type",   width=70,  stretch=False, anchor="center")
+        tree.column("text",   width=250, stretch=False)
+        tree.column("description", width=130, stretch=False)
+        tree.column("ec",     width=70,  stretch=False, anchor="center")
+        tree.column("error",  width=280, stretch=False)
+        tree.pack(fill="both", expand=True)
+        tree.tag_configure("ok",  background="#e8f5e9")
+        tree.tag_configure("dup", background="#fff9c4")
+        tree.tag_configure("err", background="#ffebee")
+
+        def _refresh_preview() -> None:
+            for item in tree.get_children():
+                tree.delete(item)
+            n_ok = n_dup = n_err = 0
+            for r in _rows:
+                if r.status == RowStatus.OK:
+                    icon, tag = "✅", "ok";  n_ok += 1
+                elif r.status == RowStatus.DUPLICATE:
+                    icon, tag = "⚠", "dup"; n_dup += 1
+                else:
+                    icon, tag = "❌", "err"; n_err += 1
+                text_disp = format_text_for_display(r.text)
+                tree.insert("", "end", tags=(tag,), values=(
+                    icon, r.code_type, text_disp, r.description,
+                    format_ec_for_display(r), r.error_msg,
+                ))
+            total = len(_rows)
+            summary_var.set(
+                f"全{total}件：✅ {n_ok}件  ⚠ {n_dup}件  ❌ {n_err}件"
+                if total else "データがありません。"
+            )
+            import_btn.config(state="normal" if total > 0 else "disabled")
+
+        def _do_import() -> None:
+            mode = _dup_mode.get()
+            n_ok = n_dup = n_err = 0
+            ts_base = datetime.now().strftime("%Y%m%d_%H%M%S")
+            for i, row in enumerate(_rows):
+                if row.status == RowStatus.ERROR:
+                    n_err += 1
+                    continue
+                if row.status == RowStatus.DUPLICATE:
+                    if mode == "skip":
+                        n_dup += 1
+                        continue
+                    elif mode == "overwrite":
+                        # 既存レコードを削除してから追加
+                        ec = row.error_correction if row.code_type == "QR" else None
+                        self.records = [
+                            r for r in self.records
+                            if not (r["text"] == row.text and r["type"] == row.code_type
+                                    and (row.code_type != "QR"
+                                         or r.get("error_correction") == ec))
+                        ]
+                    # mode == "add": 何もしない → そのまま追加処理へ
+                ts = f"{ts_base}_{i:04d}"
+                try:
+                    if row.code_type == "QR":
+                        fp = SAVE_DIR / f"qr_{ts}.png"
+                        generate_qr(row.text, fp, error_correction=row.error_correction)
+                        rec: dict = {
+                            "text": row.text, "type": row.code_type,
+                            "path": str(fp), "error_correction": row.error_correction,
+                        }
+                    else:
+                        fp = generate_barcode_file(row.text, SAVE_DIR / f"bar_{ts}")
+                        rec = {"text": row.text, "type": row.code_type, "path": str(fp)}
+                    if row.description:
+                        rec["description"] = row.description
+                    self.records.append(rec)
+                    n_ok += 1
+                except Exception:
+                    n_err += 1
+
+            save_metadata(self.records, METADATA_FILE)
+            self._filter_records()
+            dlg.destroy()
+            dup_label = {"skip": "重複スキップ", "overwrite": "重複上書き",
+                         "add": "重複追加"}[mode]
+            messagebox.showinfo(
+                "インポート完了",
+                f"成功: {n_ok}件\n{dup_label}: {n_dup}件\nエラー: {n_err}件",
+                parent=self.root,
+            )
 
     # ── 設定変更コールバック ──────────────────────────────────────────────────
 
@@ -259,6 +473,7 @@ class App:
     # ── UI 構築 ────────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
+        ttk.Style().configure("Treeview", rowheight=24)
         lf = tk.Frame(self.root, width=LEFT_W)
         lf.pack(side="left", fill="y", padx=(8, 4), pady=8)
         lf.pack_propagate(False)
