@@ -8,7 +8,7 @@ import pytest
 from PIL import Image
 
 from core import (
-    SORT_OPTIONS,
+    SORT_OPTION_LABELS,
     blank_image,
     calc_preview_size,
     find_index,
@@ -331,12 +331,12 @@ class TestSortRecords:
 
     def test_追加日新しい順はindicesが逆順になる(self, sample_records):
         indices = [0, 1, 2]
-        result = sort_records(sample_records, indices, "追加日 新しい順")
+        result = sort_records(sample_records, indices, "date_new")
         assert result == [2, 1, 0]
 
     def test_追加日古い順はindicesがそのまま(self, sample_records):
         indices = [0, 1, 2]
-        result = sort_records(sample_records, indices, "追加日 古い順")
+        result = sort_records(sample_records, indices, "date_old")
         assert result == [0, 1, 2]
 
     def test_表示名昇順はdisplay_text昇順(self, sample_records):
@@ -345,46 +345,46 @@ class TestSortRecords:
         # "✎[Barcode]..." < "✎[QR]..." ("b" < "q")
         # 昇順: [0, 1, 2]
         indices = [0, 1, 2]
-        result = sort_records(sample_records, indices, "表示名 A→Z")
+        result = sort_records(sample_records, indices, "label_az")
         assert result == [0, 1, 2]
 
     def test_表示名降順はdisplay_text降順(self, sample_records):
         # 降順: "✎[QR]  aaa" > "✎[Barcode]  zzz" > "[QR]  charlie"
         # → [2, 1, 0]
         indices = [0, 1, 2]
-        result = sort_records(sample_records, indices, "表示名 Z→A")
+        result = sort_records(sample_records, indices, "label_za")
         assert result == [2, 1, 0]
 
     def test_テキスト昇順はtext昇順(self, sample_records):
         # alice < bob < charlie
         indices = [0, 1, 2]
-        result = sort_records(sample_records, indices, "テキスト A→Z")
+        result = sort_records(sample_records, indices, "text_az")
         assert result == [1, 2, 0]
 
     def test_テキスト降順はtext降順(self, sample_records):
         # charlie > bob > alice
         indices = [0, 1, 2]
-        result = sort_records(sample_records, indices, "テキスト Z→A")
+        result = sort_records(sample_records, indices, "text_za")
         assert result == [0, 2, 1]
 
     def test_説明昇順は空欄が末尾(self, sample_records):
         # desc: 0="" (空), 1="zzz", 2="aaa"
         # 昇順: aaa < zzz < "" (空欄末尾)
         indices = [0, 1, 2]
-        result = sort_records(sample_records, indices, "説明 A→Z")
+        result = sort_records(sample_records, indices, "desc_az")
         assert result == [2, 1, 0]
 
     def test_説明降順は空欄が先頭(self, sample_records):
         # 降順: "" (空欄先頭) > zzz > aaa
         indices = [0, 1, 2]
-        result = sort_records(sample_records, indices, "説明 Z→A")
+        result = sort_records(sample_records, indices, "desc_za")
         assert result == [0, 1, 2]
 
     def test_種別QR先はBarcodeが先でQRが後(self, sample_records):
         # type: 0=QR, 1=Barcode, 2=QR
         # 昇順: Barcode < QR → [1, 0, 2] or [1, 2, 0]
         indices = [0, 1, 2]
-        result = sort_records(sample_records, indices, "種別 QR先")
+        result = sort_records(sample_records, indices, "type_qr")
         assert result[0] == 1  # Barcode が先頭
         assert set(result[1:]) == {0, 2}  # QR が後
 
@@ -392,31 +392,32 @@ class TestSortRecords:
         # type: 0=QR, 1=Barcode, 2=QR
         # 降順: QR > Barcode → QRが先, Barcode後
         indices = [0, 1, 2]
-        result = sort_records(sample_records, indices, "種別 Barcode先")
+        result = sort_records(sample_records, indices, "type_bc")
         assert result[-1] == 1  # Barcode が末尾
         assert set(result[:2]) == {0, 2}  # QR が先
 
-    def test_不明なキーは追加日新しい順と同じ(self, sample_records):
+    def test_不明なキーはdate_newと同じ(self, sample_records):
         indices = [0, 1, 2]
-        result = sort_records(sample_records, indices, "存在しないキー")
+        result = sort_records(sample_records, indices, "unknown_key")
         assert result == [2, 1, 0]
 
     def test_空リストは空リストを返す(self):
-        assert sort_records([], [], "追加日 新しい順") == []
+        assert sort_records([], [], "date_new") == []
 
     def test_フィルタ済みindicesでも正しくソート(self, sample_records):
         # indices=[0, 2] のみ (index1 はフィルタで除外済み)
         # テキスト A→Z: charlie, bob → bob(2) < charlie(0)
         indices = [0, 2]
-        result = sort_records(sample_records, indices, "テキスト A→Z")
+        result = sort_records(sample_records, indices, "text_az")
         assert result == [2, 0]
 
-    def test_SORT_OPTIONSに期待する選択肢が含まれる(self):
-        expected = [
-            "追加日 新しい順", "追加日 古い順",
-            "表示名 A→Z", "表示名 Z→A",
-            "テキスト A→Z", "テキスト Z→A",
-            "説明 A→Z", "説明 Z→A",
-            "種別 QR先", "種別 Barcode先",
+    def test_SORT_OPTION_LABELSに期待するキーとラベルが含まれる(self):
+        assert list(SORT_OPTION_LABELS.keys()) == [
+            "date_new", "date_old",
+            "label_az", "label_za",
+            "text_az", "text_za",
+            "desc_az", "desc_za",
+            "type_qr", "type_bc",
         ]
-        assert SORT_OPTIONS == expected
+        assert SORT_OPTION_LABELS["date_new"] == "追加日 新しい順"
+        assert SORT_OPTION_LABELS["type_bc"] == "種別 Barcode先"

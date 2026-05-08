@@ -12,7 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 
 from core import (
-    SORT_OPTIONS,
+    SORT_OPTION_LABELS,
     has_duplicate,
     list_labels,
     list_labels_with_status,
@@ -22,6 +22,8 @@ from core import (
     save_settings,
     sort_records,
 )
+
+_SORT_LABEL_TO_KEY: dict[str, str] = {v: k for k, v in SORT_OPTION_LABELS.items()}
 from csv_import import (
     ImportRow,
     ParseError,
@@ -554,11 +556,12 @@ class App:
         self._search_var.trace_add("write", lambda *_: self._filter_records())
         tk.Entry(search_row, textvariable=self._search_var, font=(_FONT, 10)).grid(
             row=0, column=1, sticky="ew")
+        saved_key = self.settings.get("sort_order", "date_new")
         self._sort_var = tk.StringVar(
-            value=self.settings.get("sort_order", "追加日 新しい順"))
+            value=SORT_OPTION_LABELS.get(saved_key, SORT_OPTION_LABELS["date_new"]))
         ttk.Combobox(
             search_row, textvariable=self._sort_var,
-            values=SORT_OPTIONS, state="readonly", width=12,
+            values=list(SORT_OPTION_LABELS.values()), state="readonly", width=12,
             font=(_FONT, 9),
         ).grid(row=0, column=2, sticky="e", padx=(4, 0))
         self._sort_var.trace_add("write", lambda *_: self._on_sort_change())
@@ -650,12 +653,13 @@ class App:
             ]
         else:
             indices = list(range(len(self.records)))
-        self._filtered_indices = sort_records(
-            self.records, indices, self._sort_var.get())
+        key = _SORT_LABEL_TO_KEY.get(self._sort_var.get(), "date_new")
+        self._filtered_indices = sort_records(self.records, indices, key)
         self._populate_list()
 
     def _on_sort_change(self) -> None:
-        self.settings["sort_order"] = self._sort_var.get()
+        key = _SORT_LABEL_TO_KEY.get(self._sort_var.get(), "date_new")
+        self.settings["sort_order"] = key
         save_settings(self.settings, SETTINGS_FILE)
         self._filter_records()
 

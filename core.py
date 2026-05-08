@@ -41,16 +41,21 @@ _DEFAULT_SETTINGS: dict = {
     "default_type": "QR",
     "qr_error_correction": "M",
     "pdf_cols": 3,
-    "sort_order": "追加日 新しい順",
+    "sort_order": "date_new",
 }
 
-SORT_OPTIONS = [
-    "追加日 新しい順", "追加日 古い順",
-    "表示名 A→Z", "表示名 Z→A",
-    "テキスト A→Z", "テキスト Z→A",
-    "説明 A→Z", "説明 Z→A",
-    "種別 QR先", "種別 Barcode先",
-]
+SORT_OPTION_LABELS: dict[str, str] = {
+    "date_new":  "追加日 新しい順",
+    "date_old":  "追加日 古い順",
+    "label_az":  "表示名 A→Z",
+    "label_za":  "表示名 Z→A",
+    "text_az":   "テキスト A→Z",
+    "text_za":   "テキスト Z→A",
+    "desc_az":   "説明 A→Z",
+    "desc_za":   "説明 Z→A",
+    "type_qr":   "種別 QR先",
+    "type_bc":   "種別 Barcode先",
+}
 
 
 def load_settings(path: Path) -> dict:
@@ -137,28 +142,28 @@ def calc_preview_size(win_w: int, win_h: int, left_panel_w: int) -> tuple[int, i
 
 
 def sort_records(records: list[dict], indices: list[int], sort_key: str) -> list[int]:
-    """indices を sort_key に従って並べ替えて返す（records は変更しない）。
-    不明な sort_key は "追加日 新しい順" と同じ扱い。
+    """indices を sort_key（SORT_OPTION_LABELS のキー）に従って並べ替えて返す。
+    不明な sort_key は "date_new" と同じ扱い。
     """
     if not indices:
         return []
 
-    if sort_key == "追加日 古い順":
+    if sort_key == "date_old":
         return list(indices)
 
-    if sort_key == "表示名 A→Z":
+    if sort_key == "label_az":
         return sorted(indices, key=lambda i: _item_label(records[i]).lower())
 
-    if sort_key == "表示名 Z→A":
+    if sort_key == "label_za":
         return sorted(indices, key=lambda i: _item_label(records[i]).lower(), reverse=True)
 
-    if sort_key == "テキスト A→Z":
+    if sort_key == "text_az":
         return sorted(indices, key=lambda i: records[i]["text"].lower())
 
-    if sort_key == "テキスト Z→A":
+    if sort_key == "text_za":
         return sorted(indices, key=lambda i: records[i]["text"].lower(), reverse=True)
 
-    if sort_key == "説明 A→Z":
+    if sort_key == "desc_az":
         nonempty = sorted(
             [i for i in indices if records[i].get("description")],
             key=lambda i: records[i].get("description", "").lower(),
@@ -166,7 +171,7 @@ def sort_records(records: list[dict], indices: list[int], sort_key: str) -> list
         empty = [i for i in indices if not records[i].get("description")]
         return nonempty + empty
 
-    if sort_key == "説明 Z→A":
+    if sort_key == "desc_za":
         empty = [i for i in indices if not records[i].get("description")]
         nonempty = sorted(
             [i for i in indices if records[i].get("description")],
@@ -175,11 +180,11 @@ def sort_records(records: list[dict], indices: list[int], sort_key: str) -> list
         )
         return empty + nonempty
 
-    if sort_key == "種別 QR先":
+    if sort_key == "type_qr":
         return sorted(indices, key=lambda i: records[i]["type"])
 
-    if sort_key == "種別 Barcode先":
+    if sort_key == "type_bc":
         return sorted(indices, key=lambda i: records[i]["type"], reverse=True)
 
-    # デフォルト: "追加日 新しい順"
+    # デフォルト: "date_new"
     return list(reversed(indices))
