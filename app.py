@@ -266,6 +266,13 @@ class App:
         tk.Button(top_f, text="CSVファイルを選択...", font=(_FONT, 9),
                   command=_select_file).pack(side="left", padx=(6, 0))
 
+        # ── ヒント行 ─────────────────────────────────────────────────────────
+        hint_f = tk.Frame(dlg)
+        hint_f.pack(fill="x", padx=8, pady=(0, 2))
+        tk.Label(hint_f,
+                 text="種別: QR / Barcode  ｜  誤り訂正レベル: L / M / Q / H（空欄=M、Barcode 時は無視）",
+                 font=(_FONT, 8), fg="#666666", anchor="w").pack(fill="x")
+
         # ── プレビュー（Treeview）────────────────────────────────────────────
         cols = ("status", "type", "text", "description", "error")
         tree_f = tk.Frame(dlg)
@@ -273,9 +280,12 @@ class App:
 
         vsb = tk.Scrollbar(tree_f, orient="vertical")
         vsb.pack(side="right", fill="y")
+        hsb = tk.Scrollbar(tree_f, orient="horizontal")
+        hsb.pack(side="bottom", fill="x")
         tree = ttk.Treeview(tree_f, columns=cols, show="headings",
-                            yscrollcommand=vsb.set, height=12)
+                            yscrollcommand=vsb.set, xscrollcommand=hsb.set, height=12)
         vsb.config(command=tree.yview)
+        hsb.config(command=tree.xview)
 
         tree.heading("status", text="状態")
         tree.heading("type",   text="種別")
@@ -326,7 +336,9 @@ class App:
                     icon, tag = "⚠", "dup"; n_dup += 1
                 else:
                     icon, tag = "❌", "err"; n_err += 1
-                text_disp = r.text[:60] + "…" if len(r.text) > 60 else r.text
+                text_disp = r.text.replace("\n", "↵")
+                if len(text_disp) > 60:
+                    text_disp = text_disp[:60] + "…"
                 tree.insert("", "end", tags=(tag,), values=(
                     icon, r.code_type, text_disp, r.description, r.error_msg,
                 ))
