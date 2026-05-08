@@ -323,6 +323,8 @@ class App:
                        value="skip", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
         tk.Radiobutton(dup_f, text="上書き", variable=_dup_mode,
                        value="overwrite", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
+        tk.Radiobutton(dup_f, text="そのまま追加", variable=_dup_mode,
+                       value="add", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
 
         # ── 下部ボタン ───────────────────────────────────────────────────────
         btn_f = tk.Frame(dlg)
@@ -358,7 +360,7 @@ class App:
 
         def _do_import() -> None:
             mode = _dup_mode.get()
-            n_ok = n_skip = n_err = 0
+            n_ok = n_dup = n_err = 0
             ts_base = datetime.now().strftime("%Y%m%d_%H%M%S")
             for i, row in enumerate(_rows):
                 if row.status == RowStatus.ERROR:
@@ -366,16 +368,18 @@ class App:
                     continue
                 if row.status == RowStatus.DUPLICATE:
                     if mode == "skip":
-                        n_skip += 1
+                        n_dup += 1
                         continue
-                    # 上書き: 既存レコードを削除
-                    ec = row.error_correction if row.code_type == "QR" else None
-                    self.records = [
-                        r for r in self.records
-                        if not (r["text"] == row.text and r["type"] == row.code_type
-                                and (row.code_type != "QR"
-                                     or r.get("error_correction") == ec))
-                    ]
+                    elif mode == "overwrite":
+                        # 既存レコードを削除してから追加
+                        ec = row.error_correction if row.code_type == "QR" else None
+                        self.records = [
+                            r for r in self.records
+                            if not (r["text"] == row.text and r["type"] == row.code_type
+                                    and (row.code_type != "QR"
+                                         or r.get("error_correction") == ec))
+                        ]
+                    # mode == "add": 何もしない → そのまま追加処理へ
                 ts = f"{ts_base}_{i:04d}"
                 try:
                     if row.code_type == "QR":
@@ -398,9 +402,11 @@ class App:
             save_metadata(self.records, METADATA_FILE)
             self._filter_records()
             dlg.destroy()
+            dup_label = {"skip": "重複スキップ", "overwrite": "重複上書き",
+                         "add": "重複追加"}[mode]
             messagebox.showinfo(
                 "インポート完了",
-                f"成功: {n_ok}件\n重複スキップ: {n_skip}件\nエラー: {n_err}件",
+                f"成功: {n_ok}件\n{dup_label}: {n_dup}件\nエラー: {n_err}件",
                 parent=self.root,
             )
 
