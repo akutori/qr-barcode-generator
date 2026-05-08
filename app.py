@@ -24,6 +24,7 @@ from csv_import import (
     ImportRow,
     ParseError,
     RowStatus,
+    format_ec_for_display,
     format_text_for_display,
     generate_template,
     parse_csv,
@@ -209,12 +210,16 @@ class App:
     # ── CSVインポートダイアログ ────────────────────────────────────────────────
 
     def _open_import_dialog(self) -> None:
+        if hasattr(self, "_import_dlg") and self._import_dlg.winfo_exists():
+            self._import_dlg.lift()
+            return
         dlg = tk.Toplevel(self.root)
         dlg.title("CSVインポート")
         dlg.geometry("720x500")
         dlg.minsize(600, 400)
         dlg.resizable(True, True)
-        dlg.grab_set()
+        dlg.transient(self.root)
+        self._import_dlg = dlg
 
         _rows: list[ImportRow] = []
         _dup_mode = tk.StringVar(value="skip")
@@ -275,7 +280,7 @@ class App:
                  font=(_FONT, 8), fg="#666666", anchor="w").pack(fill="x")
 
         # ── プレビュー（Treeview）────────────────────────────────────────────
-        cols = ("status", "type", "text", "description", "error")
+        cols = ("status", "type", "text", "description", "ec", "error")
         tree_f = tk.Frame(dlg)
         tree_f.pack(fill="both", expand=True, padx=8, pady=4)
 
@@ -292,12 +297,14 @@ class App:
         tree.heading("type",   text="種別")
         tree.heading("text",   text="テキスト")
         tree.heading("description", text="説明")
+        tree.heading("ec",     text="誤り訂正")
         tree.heading("error",  text="エラー詳細")
         tree.column("status", width=50,  stretch=False, anchor="center")
         tree.column("type",   width=70,  stretch=False, anchor="center")
-        tree.column("text",   width=260, stretch=True)
-        tree.column("description", width=120, stretch=False)
-        tree.column("error",  width=180, stretch=True)
+        tree.column("text",   width=250, stretch=False)
+        tree.column("description", width=130, stretch=False)
+        tree.column("ec",     width=70,  stretch=False, anchor="center")
+        tree.column("error",  width=280, stretch=False)
         tree.pack(fill="both", expand=True)
         tree.tag_configure("ok",  background="#e8f5e9")
         tree.tag_configure("dup", background="#fff9c4")
@@ -339,7 +346,8 @@ class App:
                     icon, tag = "❌", "err"; n_err += 1
                 text_disp = format_text_for_display(r.text)
                 tree.insert("", "end", tags=(tag,), values=(
-                    icon, r.code_type, text_disp, r.description, r.error_msg,
+                    icon, r.code_type, text_disp, r.description,
+                    format_ec_for_display(r), r.error_msg,
                 ))
             total = len(_rows)
             summary_var.set(

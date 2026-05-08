@@ -9,6 +9,7 @@ from csv_import import (
     ImportRow,
     ParseError,
     RowStatus,
+    format_ec_for_display,
     format_text_for_display,
     generate_template,
     parse_csv,
@@ -353,3 +354,41 @@ class TestFormatTextForDisplay:
 
     def test_空文字列は空文字列を返す(self):
         assert format_text_for_display("") == ""
+
+
+# ---------------------------------------------------------------------------
+# format_ec_for_display
+# ---------------------------------------------------------------------------
+
+class TestFormatEcForDisplay:
+    def _qr(self, ec: str, status: RowStatus = RowStatus.OK) -> ImportRow:
+        return ImportRow(line_no=2, text="t", code_type="QR",
+                         description="", error_correction=ec, status=status)
+
+    def _bc(self, ec: str = "M", status: RowStatus = RowStatus.OK) -> ImportRow:
+        return ImportRow(line_no=2, text="t", code_type="Barcode",
+                         description="", error_correction=ec, status=status)
+
+    def test_QRはerror_correctionの値をそのまま返す(self):
+        assert format_ec_for_display(self._qr("M")) == "M"
+
+    def test_QRでHはHを返す(self):
+        assert format_ec_for_display(self._qr("H")) == "H"
+
+    def test_QRでLはLを返す(self):
+        assert format_ec_for_display(self._qr("L")) == "L"
+
+    def test_QRでQはQを返す(self):
+        assert format_ec_for_display(self._qr("Q")) == "Q"
+
+    def test_Barcodeはダッシュを返す(self):
+        assert format_ec_for_display(self._bc()) == "—"
+
+    def test_Barcodeはecフィールドがあってもダッシュを返す(self):
+        assert format_ec_for_display(self._bc("H")) == "—"
+
+    def test_ERRORステータスのQRは空文字列を返す(self):
+        assert format_ec_for_display(self._qr("", RowStatus.ERROR)) == ""
+
+    def test_ERRORステータスのBarcodeはダッシュを返す(self):
+        assert format_ec_for_display(self._bc("", RowStatus.ERROR)) == "—"

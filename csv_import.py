@@ -70,6 +70,11 @@ def format_text_for_display(text: str, max_len: int = 60) -> str:
     return t[:max_len] + "…" if len(t) > max_len else t
 
 
+def format_ec_for_display(row: "ImportRow") -> str:
+    """Treeview表示用の誤り訂正レベルを返す。Barcode 行は '—'。"""
+    return row.error_correction if row.code_type == "QR" else "—"
+
+
 # ---------------------------------------------------------------------------
 # テンプレート生成
 # ---------------------------------------------------------------------------
