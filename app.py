@@ -153,6 +153,13 @@ class App:
 
     def _build_menu(self) -> None:
         menubar = tk.Menu(self.root)
+
+        file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(label="フォルダを開く", command=self.on_open_folder)
+        file_menu.add_separator()
+        file_menu.add_command(label="終了", command=self.root.quit)
+        menubar.add_cascade(label="ファイル", menu=file_menu)
+
         opt_menu = tk.Menu(menubar, tearoff=0)
         self._warn_var = tk.BooleanVar(value=self.settings.get("warn_on_duplicate", True))
         opt_menu.add_checkbutton(
@@ -160,13 +167,26 @@ class App:
             variable=self._warn_var,
             command=self._on_warn_toggle,
         )
-        opt_menu.add_separator()
-        opt_menu.add_command(label="バージョン情報", command=self._show_about)
+        self._auto_open_var = tk.BooleanVar(value=self.settings.get("auto_open_pdf", False))
+        opt_menu.add_checkbutton(
+            label="PDF出力後に自動で開く",
+            variable=self._auto_open_var,
+            command=self._on_auto_open_toggle,
+        )
         menubar.add_cascade(label="オプション", menu=opt_menu)
+
+        help_menu = tk.Menu(menubar, tearoff=0)
+        help_menu.add_command(label="バージョン情報", command=self._show_about)
+        menubar.add_cascade(label="ヘルプ", menu=help_menu)
+
         self.root.config(menu=menubar)
 
     def _on_warn_toggle(self) -> None:
         self.settings["warn_on_duplicate"] = self._warn_var.get()
+        save_settings(self.settings, SETTINGS_FILE)
+
+    def _on_auto_open_toggle(self) -> None:
+        self.settings["auto_open_pdf"] = self._auto_open_var.get()
         save_settings(self.settings, SETTINGS_FILE)
 
     def _show_about(self) -> None:
@@ -725,6 +745,13 @@ class App:
             return
         try:
             generate_pdf_grid(selected, Path(path), cols=self._pdf_cols_var.get())
+            if self.settings.get("auto_open_pdf"):
+                if sys.platform == "win32":
+                    os.startfile(path)
+                elif sys.platform == "darwin":
+                    subprocess.run(["open", path])
+                else:
+                    subprocess.run(["xdg-open", path])
             messagebox.showinfo("PDF出力", f"{len(selected)} 件を保存しました。\n{path}",
                                 parent=self.root)
         except Exception as e:
