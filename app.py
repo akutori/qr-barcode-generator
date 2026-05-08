@@ -130,7 +130,7 @@ class App:
         self.root = root
         self.root.title("QR & バーコード 生成ツール")
         self.root.minsize(WIN_MIN_W, WIN_MIN_H)
-        self.root.geometry("730x450")
+        self.root.geometry("730x480")
 
         SAVE_DIR.mkdir(exist_ok=True)
         self.records = self._load_metadata_safe()
