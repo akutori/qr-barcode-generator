@@ -41,7 +41,16 @@ _DEFAULT_SETTINGS: dict = {
     "default_type": "QR",
     "qr_error_correction": "M",
     "pdf_cols": 3,
+    "sort_order": "追加日 新しい順",
 }
+
+SORT_OPTIONS = [
+    "追加日 新しい順", "追加日 古い順",
+    "表示名 A→Z", "表示名 Z→A",
+    "テキスト A→Z", "テキスト Z→A",
+    "説明 A→Z", "説明 Z→A",
+    "種別 QR先", "種別 Barcode先",
+]
 
 
 def load_settings(path: Path) -> dict:
@@ -125,3 +134,52 @@ def calc_preview_size(win_w: int, win_h: int, left_panel_w: int) -> tuple[int, i
     pw = max(200, win_w - left_panel_w - 20)
     ph = max(200, win_h - 80)
     return pw, ph
+
+
+def sort_records(records: list[dict], indices: list[int], sort_key: str) -> list[int]:
+    """indices を sort_key に従って並べ替えて返す（records は変更しない）。
+    不明な sort_key は "追加日 新しい順" と同じ扱い。
+    """
+    if not indices:
+        return []
+
+    if sort_key == "追加日 古い順":
+        return list(indices)
+
+    if sort_key == "表示名 A→Z":
+        return sorted(indices, key=lambda i: _item_label(records[i]).lower())
+
+    if sort_key == "表示名 Z→A":
+        return sorted(indices, key=lambda i: _item_label(records[i]).lower(), reverse=True)
+
+    if sort_key == "テキスト A→Z":
+        return sorted(indices, key=lambda i: records[i]["text"].lower())
+
+    if sort_key == "テキスト Z→A":
+        return sorted(indices, key=lambda i: records[i]["text"].lower(), reverse=True)
+
+    if sort_key == "説明 A→Z":
+        nonempty = sorted(
+            [i for i in indices if records[i].get("description")],
+            key=lambda i: records[i].get("description", "").lower(),
+        )
+        empty = [i for i in indices if not records[i].get("description")]
+        return nonempty + empty
+
+    if sort_key == "説明 Z→A":
+        empty = [i for i in indices if not records[i].get("description")]
+        nonempty = sorted(
+            [i for i in indices if records[i].get("description")],
+            key=lambda i: records[i].get("description", "").lower(),
+            reverse=True,
+        )
+        return empty + nonempty
+
+    if sort_key == "種別 QR先":
+        return sorted(indices, key=lambda i: records[i]["type"])
+
+    if sort_key == "種別 Barcode先":
+        return sorted(indices, key=lambda i: records[i]["type"], reverse=True)
+
+    # デフォルト: "追加日 新しい順"
+    return list(reversed(indices))

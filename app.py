@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 
 from core import (
+    SORT_OPTIONS,
     has_duplicate,
     list_labels,
     list_labels_with_status,
@@ -19,6 +20,7 @@ from core import (
     load_settings,
     save_metadata,
     save_settings,
+    sort_records,
 )
 from csv_import import (
     ImportRow,
@@ -542,10 +544,24 @@ class App:
         tk.Label(lf, text="ダブルクリック: 拡大  Ctrl+クリック: 複数選択",
                  font=(_FONT, 8), fg="gray", anchor="w").pack(fill="x")
 
+        search_row = tk.Frame(lf)
+        search_row.pack(fill="x", pady=(2, 0))
+        search_row.columnconfigure(1, weight=1)
+
+        tk.Label(search_row, text="検索:", font=(_FONT, 10)).grid(
+            row=0, column=0, sticky="w", padx=(0, 4))
         self._search_var = tk.StringVar()
         self._search_var.trace_add("write", lambda *_: self._filter_records())
-        tk.Entry(lf, textvariable=self._search_var, font=(_FONT, 10)).pack(
-            fill="x", pady=(2, 0))
+        tk.Entry(search_row, textvariable=self._search_var, font=(_FONT, 10)).grid(
+            row=0, column=1, sticky="ew")
+        self._sort_var = tk.StringVar(
+            value=self.settings.get("sort_order", "追加日 新しい順"))
+        ttk.Combobox(
+            search_row, textvariable=self._sort_var,
+            values=SORT_OPTIONS, state="readonly", width=12,
+            font=(_FONT, 9),
+        ).grid(row=0, column=2, sticky="e", padx=(4, 0))
+        self._sort_var.trace_add("write", lambda *_: self._on_sort_change())
 
         # ── ボタン群を先に bottom で確保（リストボックスが縮んでもボタンが常に表示される）──
         pdf_f = tk.Frame(lf)
@@ -628,13 +644,20 @@ class App:
     def _filter_records(self) -> None:
         query = self._search_var.get().strip().lower()
         if query:
-            self._filtered_indices = [
+            indices = [
                 i for i, r in enumerate(self.records)
                 if query in r["text"].lower() or query in r.get("description", "").lower()
             ]
         else:
-            self._filtered_indices = list(range(len(self.records)))
+            indices = list(range(len(self.records)))
+        self._filtered_indices = sort_records(
+            self.records, indices, self._sort_var.get())
         self._populate_list()
+
+    def _on_sort_change(self) -> None:
+        self.settings["sort_order"] = self._sort_var.get()
+        save_settings(self.settings, SETTINGS_FILE)
+        self._filter_records()
 
     def _rec_idx(self, lb_idx: int) -> int:
         return self._filtered_indices[lb_idx]
