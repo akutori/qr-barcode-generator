@@ -9,6 +9,7 @@ from csv_import import (
     ImportRow,
     ParseError,
     RowStatus,
+    format_text_for_display,
     generate_template,
     parse_csv,
     validate_all,
@@ -318,3 +319,37 @@ class TestValidateAll:
         # 誤り訂正レベルが違うので重複にならない
         assert result[0].status == RowStatus.OK
         assert result[1].status == RowStatus.OK
+
+
+# ---------------------------------------------------------------------------
+# format_text_for_display
+# ---------------------------------------------------------------------------
+
+class TestFormatTextForDisplay:
+    def test_改行文字を矢印記号に置換する(self):
+        assert format_text_for_display("line1\nline2") == "line1↵line2"
+
+    def test_複数の改行もすべて置換する(self):
+        assert format_text_for_display("a\nb\nc") == "a↵b↵c"
+
+    def test_改行なしの文字列はそのまま返す(self):
+        assert format_text_for_display("hello") == "hello"
+
+    def test_最大長を超える場合は省略記号を付ける(self):
+        assert format_text_for_display("a" * 61) == "a" * 60 + "…"
+
+    def test_最大長ちょうどは省略しない(self):
+        assert format_text_for_display("a" * 60) == "a" * 60
+
+    def test_改行置換後に最大長を超えた場合も省略する(self):
+        text = "a" * 59 + "\n" + "b" * 10
+        result = format_text_for_display(text)
+        assert "↵" in result
+        assert result.endswith("…")
+        assert len(result) == 61  # 60文字 + "…"
+
+    def test_max_len引数で上限を変更できる(self):
+        assert format_text_for_display("hello world", max_len=5) == "hello…"
+
+    def test_空文字列は空文字列を返す(self):
+        assert format_text_for_display("") == ""

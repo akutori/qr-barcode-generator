@@ -24,6 +24,7 @@ from csv_import import (
     ImportRow,
     ParseError,
     RowStatus,
+    format_text_for_display,
     generate_template,
     parse_csv,
     validate_all,
@@ -336,9 +337,7 @@ class App:
                     icon, tag = "⚠", "dup"; n_dup += 1
                 else:
                     icon, tag = "❌", "err"; n_err += 1
-                text_disp = r.text.replace("\n", "↵")
-                if len(text_disp) > 60:
-                    text_disp = text_disp[:60] + "…"
+                text_disp = format_text_for_display(r.text)
                 tree.insert("", "end", tags=(tag,), values=(
                     icon, r.code_type, text_disp, r.description, r.error_msg,
                 ))
