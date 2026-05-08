@@ -181,10 +181,10 @@ def sort_records(records: list[dict], indices: list[int], sort_key: str) -> list
         return empty + nonempty
 
     if sort_key == "type_qr":
-        return sorted(indices, key=lambda i: records[i]["type"])
+        return sorted(indices, key=lambda i: records[i]["type"], reverse=True)
 
     if sort_key == "type_bc":
-        return sorted(indices, key=lambda i: records[i]["type"], reverse=True)
+        return sorted(indices, key=lambda i: records[i]["type"])
 
     # デフォルト: "date_new"
     return list(reversed(indices))

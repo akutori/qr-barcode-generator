@@ -380,21 +380,21 @@ class TestSortRecords:
         result = sort_records(sample_records, indices, "desc_za")
         assert result == [0, 1, 2]
 
-    def test_種別QR先はBarcodeが先でQRが後(self, sample_records):
+    def test_種別QR先はQRが先でBarcodeが後(self, sample_records):
         # type: 0=QR, 1=Barcode, 2=QR
-        # 昇順: Barcode < QR → [1, 0, 2] or [1, 2, 0]
+        # QR先 = QRが上(先頭), Barcode が下
         indices = [0, 1, 2]
         result = sort_records(sample_records, indices, "type_qr")
-        assert result[0] == 1  # Barcode が先頭
-        assert set(result[1:]) == {0, 2}  # QR が後
+        assert result[-1] == 1  # Barcode が末尾
+        assert set(result[:2]) == {0, 2}  # QR が先頭側
 
-    def test_種別Barcode先はQRが先でBarcodeが後(self, sample_records):
+    def test_種別Barcode先はBarcodeが先でQRが後(self, sample_records):
         # type: 0=QR, 1=Barcode, 2=QR
-        # 降順: QR > Barcode → QRが先, Barcode後
+        # Barcode先 = Barcodeが上(先頭), QR が下
         indices = [0, 1, 2]
         result = sort_records(sample_records, indices, "type_bc")
-        assert result[-1] == 1  # Barcode が末尾
-        assert set(result[:2]) == {0, 2}  # QR が先
+        assert result[0] == 1  # Barcode が先頭
+        assert set(result[1:]) == {0, 2}  # QR が後
 
     def test_不明なキーはdate_newと同じ(self, sample_records):
         indices = [0, 1, 2]
