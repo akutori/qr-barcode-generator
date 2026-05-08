@@ -272,6 +272,31 @@ class App:
         tk.Button(top_f, text="CSVファイルを選択...", font=(_FONT, 9),
                   command=_select_file).pack(side="left", padx=(6, 0))
 
+        # ── 下部ボタン（bottom から先に確保してウィンドウ縮小で潰れないようにする）──
+        btn_f = tk.Frame(dlg)
+        btn_f.pack(side="bottom", fill="x", padx=8, pady=(0, 8))
+        tk.Button(btn_f, text="キャンセル", font=(_FONT, 10),
+                  command=dlg.destroy).pack(side="right", padx=(4, 0))
+        import_btn = tk.Button(btn_f, text="インポート開始", font=(_FONT, 10, "bold"),
+                               state="disabled", command=lambda: _do_import())
+        import_btn.pack(side="right")
+
+        # ── 重複オプション ───────────────────────────────────────────────────
+        dup_f = tk.Frame(dlg)
+        dup_f.pack(side="bottom", fill="x", padx=8, pady=(2, 4))
+        tk.Label(dup_f, text="重複時:", font=(_FONT, 9)).pack(side="left")
+        tk.Radiobutton(dup_f, text="スキップ", variable=_dup_mode,
+                       value="skip", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
+        tk.Radiobutton(dup_f, text="上書き", variable=_dup_mode,
+                       value="overwrite", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
+        tk.Radiobutton(dup_f, text="そのまま追加", variable=_dup_mode,
+                       value="add", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
+
+        # ── サマリーラベル ───────────────────────────────────────────────────
+        summary_var = tk.StringVar(value="CSVファイルを選択してください。")
+        tk.Label(dlg, textvariable=summary_var, font=(_FONT, 9),
+                 anchor="w").pack(side="bottom", fill="x", padx=8)
+
         # ── ヒント行 ─────────────────────────────────────────────────────────
         hint_f = tk.Frame(dlg)
         hint_f.pack(fill="x", padx=8, pady=(0, 2))
@@ -309,31 +334,6 @@ class App:
         tree.tag_configure("ok",  background="#e8f5e9")
         tree.tag_configure("dup", background="#fff9c4")
         tree.tag_configure("err", background="#ffebee")
-
-        # ── サマリーラベル ───────────────────────────────────────────────────
-        summary_var = tk.StringVar(value="CSVファイルを選択してください。")
-        tk.Label(dlg, textvariable=summary_var, font=(_FONT, 9),
-                 anchor="w").pack(fill="x", padx=8)
-
-        # ── 重複オプション ───────────────────────────────────────────────────
-        dup_f = tk.Frame(dlg)
-        dup_f.pack(fill="x", padx=8, pady=(2, 4))
-        tk.Label(dup_f, text="重複時:", font=(_FONT, 9)).pack(side="left")
-        tk.Radiobutton(dup_f, text="スキップ", variable=_dup_mode,
-                       value="skip", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
-        tk.Radiobutton(dup_f, text="上書き", variable=_dup_mode,
-                       value="overwrite", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
-        tk.Radiobutton(dup_f, text="そのまま追加", variable=_dup_mode,
-                       value="add", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
-
-        # ── 下部ボタン ───────────────────────────────────────────────────────
-        btn_f = tk.Frame(dlg)
-        btn_f.pack(fill="x", padx=8, pady=(0, 8))
-        tk.Button(btn_f, text="キャンセル", font=(_FONT, 10),
-                  command=dlg.destroy).pack(side="right", padx=(4, 0))
-        import_btn = tk.Button(btn_f, text="インポート開始", font=(_FONT, 10, "bold"),
-                               state="disabled", command=lambda: _do_import())
-        import_btn.pack(side="right")
 
         def _refresh_preview() -> None:
             for item in tree.get_children():
