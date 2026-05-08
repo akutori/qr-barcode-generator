@@ -930,9 +930,12 @@ class App:
 
             self._search_var.set("")  # 検索をクリアして新規アイテムを確実に表示
             self._filter_records()
+            new_rec_idx = len(self.records) - 1
+            lb_pos = (self._filtered_indices.index(new_rec_idx)
+                      if new_rec_idx in self._filtered_indices else 0)
             self.listbox.selection_clear(0, tk.END)
-            self.listbox.selection_set(tk.END)
-            self.listbox.see(tk.END)
+            self.listbox.selection_set(lb_pos)
+            self.listbox.see(lb_pos)
             self._show_record(rec)
             if code_type == "QR":
                 self.qr_text.delete("1.0", "end")
