@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import dataclasses
+import io
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -93,7 +94,7 @@ def parse_csv(path: Path) -> list[ImportRow]:
     if not text.strip():
         raise ParseError("ファイルが空です。")
 
-    reader = csv.reader(text.splitlines())
+    reader = csv.reader(io.StringIO(text))
     try:
         raw_header = next(reader)
     except StopIteration:

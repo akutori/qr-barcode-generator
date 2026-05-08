@@ -160,6 +160,12 @@ class TestParseCsv:
         rows = parse_csv(p)
         assert rows[0].text == "hello,world"
 
+    def test_フィールド内改行を引用符で囲める(self, tmp_path):
+        p = _write_csv(tmp_path, VALID_HEADER + '"line1\nline2",QR,説明,M\n')
+        rows = parse_csv(p)
+        assert rows[0].text == "line1\nline2"
+        assert rows[0].status == RowStatus.OK
+
     def test_列数が多い行は余分な列を無視する(self, tmp_path):
         p = _write_csv(tmp_path, VALID_HEADER + "hello,QR,desc,M,extra,more\n")
         rows = parse_csv(p)
