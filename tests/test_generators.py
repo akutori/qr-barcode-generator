@@ -90,6 +90,14 @@ class TestGenerateQR:
         h_multi = Image.open(str(fp_multi)).height
         assert h_multi == h_single
 
+    def test_テキストが長すぎる場合はValueErrorを送出する(self, tmp_path):
+        """QR バイナリ上限 (2,953 バイト) を超えるテキストは ValueError になる。
+        CLAUDE.md: "version" を含むエラーメッセージをキャッチして日本語メッセージに変換する
+        """
+        text = "A" * 5000
+        with pytest.raises(ValueError, match="長すぎて"):
+            generate_qr(text, tmp_path / "qr.png")
+
 
 # ---------------------------------------------------------------------------
 # バーコード生成
@@ -113,6 +121,17 @@ class TestGenerateBarcodeFile:
     def test_返り値はPathオブジェクトである(self, tmp_path):
         result = generate_barcode_file("12345", tmp_path / "bar")
         assert isinstance(result, Path)
+
+    def test_非ASCII文字はValueErrorを送出する(self, tmp_path):
+        """日本語等の非ASCII文字は Code128 で扱えないため ValueError になる。
+        CLAUDE.md: "text.isascii() で検証し ValueError を送出する"
+        """
+        with pytest.raises(ValueError):
+            generate_barcode_file("日本語テスト", tmp_path / "bar")
+
+    def test_絵文字はValueErrorを送出する(self, tmp_path):
+        with pytest.raises(ValueError):
+            generate_barcode_file("hello🎉", tmp_path / "bar")
 
 
 # ---------------------------------------------------------------------------
@@ -209,4 +228,16 @@ class TestGeneratePdfGrid:
         records = [_png_record(tmp_path, "fallback_text")]
         output = tmp_path / "out.pdf"
         generate_pdf_grid(records, output)
+        assert output.exists()
+
+    def test_1列指定でファイルが生成される(self, tmp_path):
+        records = [_png_record(tmp_path, "hello")]
+        output = tmp_path / "out.pdf"
+        generate_pdf_grid(records, output, cols=1)
+        assert output.exists()
+
+    def test_6列指定でファイルが生成される(self, tmp_path):
+        records = [_png_record(tmp_path, "hello")]
+        output = tmp_path / "out.pdf"
+        generate_pdf_grid(records, output, cols=6)
         assert output.exists()

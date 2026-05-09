@@ -95,6 +95,10 @@ class TestParseCsv:
         with pytest.raises(ParseError):
             parse_csv(p)
 
+    def test_存在しないファイルはParseErrorを送出する(self, tmp_path):
+        with pytest.raises(ParseError):
+            parse_csv(tmp_path / "nonexistent.csv")
+
     def test_ヘッダーのみは空リストを返す(self, tmp_path):
         p = _write_csv(tmp_path, VALID_HEADER)
         assert parse_csv(p) == []
