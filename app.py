@@ -67,6 +67,32 @@ SAVE_DIR = _app_dir() / "generated"
 METADATA_FILE = SAVE_DIR / "metadata.json"
 SETTINGS_FILE = SAVE_DIR / "settings.json"
 
+_TYPE_DISP: dict[str, str] = {"Q": "QR", "B": "Barcode"}
+
+
+def _filter_overwrite(
+    records: list[dict], text: str, code_type: str, ec: str | None
+) -> list[dict]:
+    """上書きモード時に対象レコードを除去した新しいリストを返す。
+
+    QR の場合: ec が一致するレコード、および ec フィールドなしの旧レコードを除去する。
+    has_duplicate が旧レコードを重複と判定するため、上書き時も除去して一貫性を保つ。
+    """
+    def _matches(r: dict) -> bool:
+        if r["text"] != text or r["type"] != code_type:
+            return False
+        if code_type != "Q":
+            return True
+        return r.get("error_correction") == ec or "error_correction" not in r
+
+    return [r for r in records if not _matches(r)]
+
+
+def _description_for_copy(rec: dict) -> str | None:
+    """説明をコピーする文字列を返す。説明がない・空の場合は None を返す。"""
+    desc = rec.get("description", "")
+    return desc if desc else None
+
 
 # ---------------------------------------------------------------------------
 # 拡大表示ウィンドウ
@@ -305,7 +331,7 @@ class App:
         hint_f = tk.Frame(dlg)
         hint_f.pack(fill="x", padx=8, pady=(0, 2))
         tk.Label(hint_f,
-                 text="種別: QR / Barcode  ｜  誤り訂正レベル: L / M / Q / H（空欄=M、Barcode 時は無視）",
+                 text="種別: QR（または Q）/ Barcode（または B）  ｜  誤り訂正レベル: L / M / Q / H（空欄=M、Barcode は無視）",
                  font=(_FONT, 8), fg="#666666", anchor="w").pack(fill="x")
 
         # ── プレビュー（Treeview）────────────────────────────────────────────
@@ -352,7 +378,8 @@ class App:
                     icon, tag = "❌", "err"; n_err += 1
                 text_disp = format_text_for_display(r.text)
                 tree.insert("", "end", tags=(tag,), values=(
-                    icon, r.code_type, text_disp, r.description,
+                    icon, _TYPE_DISP.get(r.code_type, r.code_type),
+                    text_disp, r.description,
                     format_ec_for_display(r), r.error_msg,
                 ))
             total = len(_rows)
@@ -376,17 +403,14 @@ class App:
                         continue
                     elif mode == "overwrite":
                         # 既存レコードを削除してから追加
-                        ec = row.error_correction if row.code_type == "QR" else None
-                        self.records = [
-                            r for r in self.records
-                            if not (r["text"] == row.text and r["type"] == row.code_type
-                                    and (row.code_type != "QR"
-                                         or r.get("error_correction") == ec))
-                        ]
+                        ec = row.error_correction if row.code_type == "Q" else None
+                        self.records = _filter_overwrite(
+                            self.records, row.text, row.code_type, ec
+                        )
                     # mode == "add": 何もしない → そのまま追加処理へ
                 ts = f"{ts_base}_{i:04d}"
                 try:
-                    if row.code_type == "QR":
+                    if row.code_type == "Q":
                         fp = SAVE_DIR / f"qr_{ts}.png"
                         generate_qr(row.text, fp, error_correction=row.error_correction)
                         rec: dict = {
@@ -418,8 +442,8 @@ class App:
 
     def _on_type_change(self) -> None:
         t = self.type_var.get()
-        if t == "QR":
-            # Barcode → QR: Entry の内容を qr_text に引き継いで切り替え
+        if t == "Q":
+            # B → Q: Entry の内容を qr_text に引き継いで切り替え
             current = self.entry_var.get()
             self.entry.pack_forget()
             self.qr_text.pack(fill="x")   # コンテナ内のため before= 不要
@@ -428,7 +452,7 @@ class App:
                 self.qr_text.insert("1.0", current)
             self._ec_frame.pack(fill="x", pady=(0, 4), after=self._radio_f)
         else:
-            # QR → Barcode: qr_text の先頭行を Entry に引き継いで切り替え
+            # Q → B: qr_text の先頭行を Entry に引き継いで切り替え
             first_line = self.qr_text.get("1.0", "end-1c").split("\n")[0].strip()
             self.qr_text.pack_forget()
             self.entry.pack(fill="x")     # コンテナ内のため before= 不要
@@ -508,16 +532,16 @@ class App:
 
         self._radio_f = radio_f = tk.Frame(lf)
         radio_f.pack(fill="x", pady=(0, 2))
-        self.type_var = tk.StringVar(value=self.settings.get("default_type", "QR"))
+        self.type_var = tk.StringVar(value=self.settings.get("default_type", "Q"))
         tk.Radiobutton(radio_f, text="QR コード", variable=self.type_var,
-                       value="QR", font=(_FONT, 10),
+                       value="Q", font=(_FONT, 10),
                        command=self._on_type_change).pack(side="left")
         tk.Radiobutton(radio_f, text="バーコード (Code128)", variable=self.type_var,
-                       value="Barcode", font=(_FONT, 10),
+                       value="B", font=(_FONT, 10),
                        command=self._on_type_change).pack(side="left")
 
         # 初期タイプに応じて入力ウィジェットを表示
-        if self.type_var.get() == "QR":
+        if self.type_var.get() == "Q":
             self.qr_text.pack(fill="x")
         else:
             self.entry.pack(fill="x")
@@ -533,7 +557,7 @@ class App:
                      state="readonly", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
         tk.Label(self._ec_frame, text="L=低  M=中  Q=高  H=最高",
                  font=(_FONT, 8), fg="gray").pack(side="left", padx=(6, 0))
-        if self.type_var.get() == "QR":
+        if self.type_var.get() == "Q":
             self._ec_frame.pack(fill="x", pady=(0, 4))
 
         tk.Button(lf, text="生成して保存", font=(_FONT, 11, "bold"),
@@ -604,6 +628,9 @@ class App:
         self._context_menu = tk.Menu(self.root, tearoff=0)
         self._context_menu.add_command(
             label="テキストをコピー", command=self._copy_selected_text
+        )
+        self._context_menu.add_command(
+            label="説明をコピー", command=self._copy_selected_description
         )
         self._context_menu.add_command(
             label="画像をコピー", command=self._copy_selected_image
@@ -792,6 +819,9 @@ class App:
             return
         self.listbox.selection_clear(0, tk.END)
         self.listbox.selection_set(idx)
+        rec = self.records[self._rec_idx(idx)]
+        state = tk.NORMAL if _description_for_copy(rec) else tk.DISABLED
+        self._context_menu.entryconfig("説明をコピー", state=state)
         self._context_menu.tk_popup(event.x_root, event.y_root)
 
     def _on_desc_label_enter(self, event: tk.Event) -> None:
@@ -840,6 +870,16 @@ class App:
         self.root.clipboard_clear()
         self.root.clipboard_append(self.records[self._rec_idx(sel[0])]["text"])
 
+    def _copy_selected_description(self) -> None:
+        sel = self.listbox.curselection()
+        if not sel or sel[0] >= len(self._filtered_indices):
+            return
+        desc = _description_for_copy(self.records[self._rec_idx(sel[0])])
+        if desc is None:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(desc)
+
     def _copy_selected_image(self) -> None:
         # clip.exe はテキスト専用のため画像コピー不可。
         # pywin32 依存を避けるため PowerShell の SetImage を使用。
@@ -865,7 +905,8 @@ class App:
         top.resizable(False, False)
         top.grab_set()
 
-        type_label = f"{code_type}:{error_correction}" if code_type == "QR" and error_correction else code_type
+        disp_type = _TYPE_DISP.get(code_type, code_type)
+        type_label = f"{disp_type}:{error_correction}" if code_type == "Q" and error_correction else disp_type
         tk.Label(top, text=f"[{type_label}]  {text}\nはすでに存在します。追加しますか？",
                  font=(_FONT, 10), padx=16, pady=12, justify="left").pack()
 
@@ -901,7 +942,7 @@ class App:
     def on_generate(self) -> None:
         self._save_description()
         code_type = self.type_var.get()
-        if code_type == "QR":
+        if code_type == "Q":
             text = self.qr_text.get("1.0", "end-1c").strip()
         else:
             text = self.entry_var.get().strip()
@@ -910,14 +951,14 @@ class App:
                                    parent=self.root)
             return
 
-        ec = self._ec_var.get() if code_type == "QR" else None
+        ec = self._ec_var.get() if code_type == "Q" else None
         if self.settings.get("warn_on_duplicate", True) and has_duplicate(text, code_type, self.records, error_correction=ec):
             if not self._ask_duplicate(text, code_type, error_correction=ec):
                 return
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         try:
-            if code_type == "QR":
+            if code_type == "Q":
                 fp = SAVE_DIR / f"qr_{ts}.png"
                 generate_qr(text, fp, error_correction=self._ec_var.get())
                 rec = {"text": text, "type": code_type, "path": str(fp),
@@ -937,7 +978,7 @@ class App:
             self.listbox.selection_set(lb_pos)
             self.listbox.see(lb_pos)
             self._show_record(rec)
-            if code_type == "QR":
+            if code_type == "Q":
                 self.qr_text.delete("1.0", "end")
             else:
                 self.entry_var.set("")

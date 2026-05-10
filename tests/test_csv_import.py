@@ -73,10 +73,10 @@ class TestParseCsv:
         rows = parse_csv(p)
         assert len(rows) == 2
         assert rows[0].text == "https://example.com"
-        assert rows[0].code_type == "QR"
+        assert rows[0].code_type == "Q"
         assert rows[0].description == "会社サイト"
         assert rows[0].error_correction == "M"
-        assert rows[1].code_type == "Barcode"
+        assert rows[1].code_type == "B"
 
     def test_BOM付きUTF8を正しく読み込める(self, tmp_path):
         content = (VALID_HEADER + VALID_ROW_QR).encode("utf-8-sig")
@@ -106,9 +106,9 @@ class TestParseCsv:
     def test_typeは大文字小文字不問で正規化される(self, tmp_path):
         p = _write_csv(tmp_path, VALID_HEADER + "hello,qr,,m\n" + "world,barcode,,\n")
         rows = parse_csv(p)
-        assert rows[0].code_type == "QR"
+        assert rows[0].code_type == "Q"
         assert rows[0].error_correction == "M"
-        assert rows[1].code_type == "Barcode"
+        assert rows[1].code_type == "B"
 
     def test_無効なtypeはERRORステータス(self, tmp_path):
         p = _write_csv(tmp_path, VALID_HEADER + "hello,INVALID,,M\n")
@@ -184,6 +184,26 @@ class TestParseCsv:
         rows = parse_csv(p)
         assert len(rows) == 5
 
+    def test_Qを入力するとcode_typeがQになる(self, tmp_path):
+        p = _write_csv(tmp_path, VALID_HEADER + "hello,Q,,M\n")
+        rows = parse_csv(p)
+        assert rows[0].code_type == "Q"
+
+    def test_Bを入力するとcode_typeがBになる(self, tmp_path):
+        p = _write_csv(tmp_path, VALID_HEADER + "12345,B,,\n")
+        rows = parse_csv(p)
+        assert rows[0].code_type == "B"
+
+    def test_小文字qも受け入れQに正規化される(self, tmp_path):
+        p = _write_csv(tmp_path, VALID_HEADER + "hello,q,,M\n")
+        rows = parse_csv(p)
+        assert rows[0].code_type == "Q"
+
+    def test_小文字bも受け入れBに正規化される(self, tmp_path):
+        p = _write_csv(tmp_path, VALID_HEADER + "12345,b,,\n")
+        rows = parse_csv(p)
+        assert rows[0].code_type == "B"
+
 
 # ---------------------------------------------------------------------------
 # validate_row
@@ -191,11 +211,11 @@ class TestParseCsv:
 
 class TestValidateRow:
     def _ok_qr_row(self, text: str = "hello", ec: str = "M") -> ImportRow:
-        return ImportRow(line_no=2, text=text, code_type="QR",
+        return ImportRow(line_no=2, text=text, code_type="Q",
                          description="", error_correction=ec)
 
     def _ok_bc_row(self, text: str = "12345") -> ImportRow:
-        return ImportRow(line_no=2, text=text, code_type="Barcode",
+        return ImportRow(line_no=2, text=text, code_type="B",
                          description="", error_correction="M")
 
     def test_QRで正常なテキストはOK(self):
@@ -236,14 +256,14 @@ class TestValidateRow:
         assert result.status == RowStatus.ERROR
 
     def test_既存レコードと重複する場合はDUPLICATE(self):
-        existing = [{"text": "hello", "type": "QR", "path": "qr.png",
+        existing = [{"text": "hello", "type": "Q", "path": "qr.png",
                      "error_correction": "M"}]
         row = self._ok_qr_row("hello")
         result = validate_row(row, existing)
         assert result.status == RowStatus.DUPLICATE
 
     def test_重複なしはOK(self):
-        existing = [{"text": "other", "type": "QR", "path": "qr.png",
+        existing = [{"text": "other", "type": "Q", "path": "qr.png",
                      "error_correction": "M"}]
         row = self._ok_qr_row("hello")
         result = validate_row(row, existing)
@@ -263,7 +283,7 @@ class TestValidateRow:
 # ---------------------------------------------------------------------------
 
 class TestValidateAll:
-    def _make_row(self, text: str, code_type: str = "QR",
+    def _make_row(self, text: str, code_type: str = "Q",
                   status: RowStatus = RowStatus.OK) -> ImportRow:
         return ImportRow(line_no=2, text=text, code_type=code_type,
                          description="", error_correction="M", status=status)
@@ -274,7 +294,7 @@ class TestValidateAll:
         assert all(r.status == RowStatus.OK for r in result)
 
     def test_OKとDUPLICATEとERRORが混在する場合を正しく分類できる(self):
-        existing = [{"text": "dup", "type": "QR", "path": "qr.png",
+        existing = [{"text": "dup", "type": "Q", "path": "qr.png",
                      "error_correction": "M"}]
         err_row = self._make_row("x", status=RowStatus.ERROR)
         err_row.error_msg = "事前エラー"
@@ -296,7 +316,7 @@ class TestValidateAll:
         assert result[1].status == RowStatus.DUPLICATE
 
     def test_既存レコードとの重複もDUPLICATEになる(self):
-        existing = [{"text": "already", "type": "QR", "path": "qr.png",
+        existing = [{"text": "already", "type": "Q", "path": "qr.png",
                      "error_correction": "M"}]
         rows = [self._make_row("already")]
         result = validate_all(rows, existing)
@@ -316,9 +336,9 @@ class TestValidateAll:
         assert validate_all([], []) == []
 
     def test_CSV内重複チェックはQRと誤り訂正レベルも考慮する(self):
-        row_m = ImportRow(line_no=2, text="hello", code_type="QR",
+        row_m = ImportRow(line_no=2, text="hello", code_type="Q",
                           description="", error_correction="M")
-        row_h = ImportRow(line_no=3, text="hello", code_type="QR",
+        row_h = ImportRow(line_no=3, text="hello", code_type="Q",
                           description="", error_correction="H")
         result = validate_all([row_m, row_h], [])
         # 誤り訂正レベルが違うので重複にならない
@@ -366,11 +386,11 @@ class TestFormatTextForDisplay:
 
 class TestFormatEcForDisplay:
     def _qr(self, ec: str, status: RowStatus = RowStatus.OK) -> ImportRow:
-        return ImportRow(line_no=2, text="t", code_type="QR",
+        return ImportRow(line_no=2, text="t", code_type="Q",
                          description="", error_correction=ec, status=status)
 
     def _bc(self, ec: str = "M", status: RowStatus = RowStatus.OK) -> ImportRow:
-        return ImportRow(line_no=2, text="t", code_type="Barcode",
+        return ImportRow(line_no=2, text="t", code_type="B",
                          description="", error_correction=ec, status=status)
 
     def test_QRはerror_correctionの値をそのまま返す(self):

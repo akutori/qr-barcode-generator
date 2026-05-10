@@ -29,6 +29,8 @@
 
 - 複数選択して A4 PDF グリッド出力（列数 1〜6 を選択可、複数ページ対応）
 - CSV 一括インポート（CSV / テキストファイルから複数コードをまとめて生成）
+  - `type` 列に `QR` または `Q`（QR コード）、`BARCODE` または `B`（バーコード）を指定（大文字小文字不問）
+  - `error_correction` 列に `L` / `M` / `Q` / `H` を指定（省略時は `M`、バーコード時は無視）
 - PDF 出力後に自動でファイルを開くオプション
 
 ### その他
@@ -81,7 +83,9 @@ QR-Barcode-GUI/
 ├── generators.py    # QR・バーコード・PDF 生成ロジック
 ├── csv_import.py    # CSV パース・バリデーション
 ├── tests/
+│   ├── test_app.py
 │   ├── test_core.py
+│   ├── test_csv_import.py
 │   └── test_generators.py
 ├── pyproject.toml
 └── generated/       # 生成画像・設定・履歴の保存先（実行時に自動作成）

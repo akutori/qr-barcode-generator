@@ -25,7 +25,12 @@ TEMPLATE_EXAMPLE_ROWS = [
     "12345678901234,Barcode,説明（省略可）,",
 ]
 
-_VALID_TYPES_NORMALIZED = {"QR": "QR", "BARCODE": "Barcode"}
+_VALID_TYPES_NORMALIZED = {
+    "Q":       "Q",
+    "QR":      "Q",
+    "B":       "B",
+    "BARCODE": "B",
+}
 _VALID_EC = {"L", "M", "Q", "H"}
 
 _EC_MAP = {
@@ -49,7 +54,7 @@ class RowStatus(Enum):
 class ImportRow:
     line_no: int
     text: str
-    code_type: str        # 正規化済み "QR" / "Barcode"
+    code_type: str        # 正規化済み "Q" / "B"
     description: str
     error_correction: str # "L"/"M"/"Q"/"H"
     status: RowStatus = RowStatus.OK
@@ -72,7 +77,7 @@ def format_text_for_display(text: str, max_len: int = 60) -> str:
 
 def format_ec_for_display(row: "ImportRow") -> str:
     """Treeview表示用の誤り訂正レベルを返す。Barcode 行は '—'。"""
-    return row.error_correction if row.code_type == "QR" else "—"
+    return row.error_correction if row.code_type == "Q" else "—"
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +166,7 @@ def _parse_row(line_no: int, raw: list[str]) -> ImportRow:
         return ImportRow(
             line_no=line_no, text=text, code_type=raw_type, description=description,
             error_correction="", status=RowStatus.ERROR,
-            error_msg=f"不正な種別: '{raw_type}'（QR または Barcode を指定してください）",
+            error_msg=f"不正な種別: '{raw_type}'（QR/Q または BARCODE/B を指定してください）",
         )
 
     # error_correction の検証（Barcode は任意）
@@ -195,7 +200,7 @@ def validate_row(row: ImportRow, existing_records: list[dict]) -> ImportRow:
     if row.status == RowStatus.ERROR:
         return row
 
-    if row.code_type == "QR":
+    if row.code_type == "Q":
         err = _check_qr_capacity(row.text, row.error_correction)
         if err:
             return dataclasses.replace(row, status=RowStatus.ERROR, error_msg=err)
@@ -206,7 +211,7 @@ def validate_row(row: ImportRow, existing_records: list[dict]) -> ImportRow:
                 error_msg="バーコード (Code128) は ASCII 文字のみ対応しています。",
             )
 
-    ec = row.error_correction if row.code_type == "QR" else None
+    ec = row.error_correction if row.code_type == "Q" else None
     if has_duplicate(row.text, row.code_type, existing_records, error_correction=ec):
         return dataclasses.replace(row, status=RowStatus.DUPLICATE,
                                    error_msg="既存のレコードと重複しています。")
@@ -254,7 +259,7 @@ def validate_all(
                 "type": validated.code_type,
                 "path": "",
             }
-            if validated.code_type == "QR":
+            if validated.code_type == "Q":
                 rec["error_correction"] = validated.error_correction
             working_records.append(rec)
 

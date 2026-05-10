@@ -163,7 +163,7 @@ def _png_record(tmp_path: Path, text: str, filename: str = "test.png") -> dict:
     img_path = tmp_path / filename
     if not img_path.exists():
         Image.new("RGB", (200, 200), "white").save(str(img_path))
-    return {"text": text, "type": "QR", "path": str(img_path)}
+    return {"text": text, "type": "Q", "path": str(img_path)}
 
 
 class TestGeneratePdfGrid:
@@ -185,7 +185,7 @@ class TestGeneratePdfGrid:
         assert output.read_bytes()[:4] == b"%PDF"
 
     def test_存在しない画像パスでもエラーにならない(self, tmp_path):
-        records = [{"text": "hello", "type": "QR", "path": str(tmp_path / "missing.png")}]
+        records = [{"text": "hello", "type": "Q", "path": str(tmp_path / "missing.png")}]
         output = tmp_path / "out.pdf"
         generate_pdf_grid(records, output)
         assert output.exists()
@@ -194,7 +194,7 @@ class TestGeneratePdfGrid:
         # cols=3, rows=4 → per_page=12 なので 13 件目で 2 ページ目に突入する
         img_path = tmp_path / "test.png"
         Image.new("RGB", (200, 200), "white").save(str(img_path))
-        rec = {"text": "item", "type": "QR", "path": str(img_path)}
+        rec = {"text": "item", "type": "Q", "path": str(img_path)}
 
         out_1 = tmp_path / "one_page.pdf"
         out_2 = tmp_path / "two_page.pdf"

@@ -35,21 +35,21 @@ class TestLoadMetadata:
 
     def test_保存したレコードをそのまま読み返せる(self, tmp_path):
         path = tmp_path / "meta.json"
-        records = [{"text": "hello", "type": "QR", "path": "generated/qr.png"}]
+        records = [{"text": "hello", "type": "Q", "path": "generated/qr.png"}]
         save_metadata(records, path)
         assert load_metadata(path) == records
 
     def test_日本語テキストが文字化けしない(self, tmp_path):
         path = tmp_path / "meta.json"
-        records = [{"text": "日本語テスト", "type": "QR", "path": "qr.png"}]
+        records = [{"text": "日本語テスト", "type": "Q", "path": "qr.png"}]
         save_metadata(records, path)
         assert load_metadata(path)[0]["text"] == "日本語テスト"
 
     def test_複数レコードを保持できる(self, tmp_path):
         path = tmp_path / "meta.json"
         records = [
-            {"text": "a", "type": "QR", "path": "qr.png"},
-            {"text": "b", "type": "Barcode", "path": "bar.png"},
+            {"text": "a", "type": "Q", "path": "qr.png"},
+            {"text": "b", "type": "B", "path": "bar.png"},
         ]
         save_metadata(records, path)
         assert len(load_metadata(path)) == 2
@@ -87,32 +87,32 @@ class TestLoadSettings:
 
 class TestHasDuplicate:
     def test_同じテキストと種別が存在するときTrueを返す(self):
-        records = [{"text": "hello", "type": "QR", "path": "qr.png"}]
-        assert has_duplicate("hello", "QR", records) is True
+        records = [{"text": "hello", "type": "Q", "path": "qr.png"}]
+        assert has_duplicate("hello", "Q", records) is True
 
     def test_テキストが異なるときFalseを返す(self):
-        records = [{"text": "hello", "type": "QR", "path": "qr.png"}]
-        assert has_duplicate("world", "QR", records) is False
+        records = [{"text": "hello", "type": "Q", "path": "qr.png"}]
+        assert has_duplicate("world", "Q", records) is False
 
     def test_種別が異なるときFalseを返す(self):
-        records = [{"text": "hello", "type": "QR", "path": "qr.png"}]
-        assert has_duplicate("hello", "Barcode", records) is False
+        records = [{"text": "hello", "type": "Q", "path": "qr.png"}]
+        assert has_duplicate("hello", "B", records) is False
 
     def test_空リストはFalseを返す(self):
-        assert has_duplicate("hello", "QR", []) is False
+        assert has_duplicate("hello", "Q", []) is False
 
     def test_QRで同じテキストだが誤り訂正レベルが異なるときFalseを返す(self):
-        records = [{"text": "hello", "type": "QR", "path": "qr.png", "error_correction": "M"}]
-        assert has_duplicate("hello", "QR", records, error_correction="H") is False
+        records = [{"text": "hello", "type": "Q", "path": "qr.png", "error_correction": "M"}]
+        assert has_duplicate("hello", "Q", records, error_correction="H") is False
 
     def test_QRで同じテキストと誤り訂正レベルが一致するときTrueを返す(self):
-        records = [{"text": "hello", "type": "QR", "path": "qr.png", "error_correction": "M"}]
-        assert has_duplicate("hello", "QR", records, error_correction="M") is True
+        records = [{"text": "hello", "type": "Q", "path": "qr.png", "error_correction": "M"}]
+        assert has_duplicate("hello", "Q", records, error_correction="M") is True
 
     def test_誤り訂正レベルフィールドのない旧レコードは保守的にTrueを返す(self):
         """error_correction フィールドがない旧レコードはレベルを問わず重複と判定する"""
-        records = [{"text": "hello", "type": "QR", "path": "qr.png"}]
-        assert has_duplicate("hello", "QR", records, error_correction="H") is True
+        records = [{"text": "hello", "type": "Q", "path": "qr.png"}]
+        assert has_duplicate("hello", "Q", records, error_correction="H") is True
 
 
 # ---------------------------------------------------------------------------
@@ -166,19 +166,19 @@ class TestListLabelsWithStatus:
     def test_ファイルが存在するレコードはそのまま返す(self, tmp_path):
         img = tmp_path / "qr.png"
         img.write_bytes(b"dummy")
-        records = [{"text": "hello", "type": "QR", "path": str(img)}]
+        records = [{"text": "hello", "type": "Q", "path": str(img)}]
         assert list_labels_with_status(records) == ["[QR]  hello"]
 
     def test_ファイルが存在しないレコードには警告記号を付ける(self, tmp_path):
-        records = [{"text": "hello", "type": "QR", "path": str(tmp_path / "missing.png")}]
+        records = [{"text": "hello", "type": "Q", "path": str(tmp_path / "missing.png")}]
         assert list_labels_with_status(records) == ["⚠[QR]  hello"]
 
     def test_存在するものと欠損が混在する場合に正しく区別する(self, tmp_path):
         existing = tmp_path / "ok.png"
         existing.write_bytes(b"dummy")
         records = [
-            {"text": "ok", "type": "QR", "path": str(existing)},
-            {"text": "missing", "type": "Barcode", "path": str(tmp_path / "gone.png")},
+            {"text": "ok", "type": "Q", "path": str(existing)},
+            {"text": "missing", "type": "B", "path": str(tmp_path / "gone.png")},
         ]
         result = list_labels_with_status(records)
         assert result[0] == "[QR]  ok"
@@ -190,37 +190,37 @@ class TestListLabelsWithStatus:
     def test_QRに誤り訂正レベルが含まれる場合は角括弧内に表示される(self, tmp_path):
         img = tmp_path / "qr.png"
         img.write_bytes(b"dummy")
-        records = [{"text": "hello", "type": "QR", "path": str(img), "error_correction": "L"}]
+        records = [{"text": "hello", "type": "Q", "path": str(img), "error_correction": "L"}]
         assert list_labels_with_status(records) == ["[QR:L]  hello"]
 
     def test_欠損レコードでもQRの誤り訂正レベルが表示される(self, tmp_path):
-        records = [{"text": "hello", "type": "QR",
+        records = [{"text": "hello", "type": "Q",
                     "path": str(tmp_path / "missing.png"), "error_correction": "H"}]
         assert list_labels_with_status(records) == ["⚠[QR:H]  hello"]
 
     def test_descriptionがある場合はえんぴつプレフィックスと説明文で表示される(self, tmp_path):
         img = tmp_path / "qr.png"
         img.write_bytes(b"dummy")
-        records = [{"text": "https://example.com", "type": "QR",
+        records = [{"text": "https://example.com", "type": "Q",
                     "path": str(img), "description": "商品A"}]
         assert list_labels_with_status(records) == ["✎[QR]  商品A"]
 
     def test_descriptionがある場合にファイル欠損なら両方のプレフィックスが付く(self, tmp_path):
-        records = [{"text": "hello", "type": "QR",
+        records = [{"text": "hello", "type": "Q",
                     "path": str(tmp_path / "missing.png"), "description": "説明"}]
         assert list_labels_with_status(records) == ["⚠✎[QR]  説明"]
 
     def test_descriptionが空文字列ならプレフィックスなしでテキスト先頭行を表示(self, tmp_path):
         img = tmp_path / "qr.png"
         img.write_bytes(b"dummy")
-        records = [{"text": "hello", "type": "QR",
+        records = [{"text": "hello", "type": "Q",
                     "path": str(img), "description": ""}]
         assert list_labels_with_status(records) == ["[QR]  hello"]
 
     def test_改行付きテキストは先頭行のみ表示される(self, tmp_path):
         img = tmp_path / "qr.png"
         img.write_bytes(b"dummy")
-        records = [{"text": "line1\nline2\nline3", "type": "QR", "path": str(img)}]
+        records = [{"text": "line1\nline2\nline3", "type": "Q", "path": str(img)}]
         assert list_labels_with_status(records) == ["[QR]  line1"]
 
 
@@ -230,56 +230,56 @@ class TestListLabels:
 
     def test_型とテキストが角括弧形式でフォーマットされる(self):
         records = [
-            {"text": "hello", "type": "QR", "path": "..."},
-            {"text": "world", "type": "Barcode", "path": "..."},
+            {"text": "hello", "type": "Q", "path": "..."},
+            {"text": "world", "type": "B", "path": "..."},
         ]
         assert list_labels(records) == ["[QR]  hello", "[Barcode]  world"]
 
     def test_QRに誤り訂正レベルが含まれる場合は角括弧内に表示される(self):
-        records = [{"text": "hello", "type": "QR", "path": "...", "error_correction": "H"}]
+        records = [{"text": "hello", "type": "Q", "path": "...", "error_correction": "H"}]
         assert list_labels(records) == ["[QR:H]  hello"]
 
     def test_誤り訂正レベルのないQRは従来フォーマットで返す(self):
-        records = [{"text": "hello", "type": "QR", "path": "..."}]
+        records = [{"text": "hello", "type": "Q", "path": "..."}]
         assert list_labels(records) == ["[QR]  hello"]
 
     def test_descriptionがある場合はえんぴつプレフィックスと説明文で表示される(self):
-        records = [{"text": "https://example.com", "type": "QR",
+        records = [{"text": "https://example.com", "type": "Q",
                     "path": "...", "description": "商品A"}]
         assert list_labels(records) == ["✎[QR]  商品A"]
 
     def test_改行付きテキストは先頭行のみ表示される(self):
-        records = [{"text": "line1\nline2", "type": "QR", "path": "..."}]
+        records = [{"text": "line1\nline2", "type": "Q", "path": "..."}]
         assert list_labels(records) == ["[QR]  line1"]
 
 
 class TestFindIndex:
     def test_一致するラベルのインデックスを返す(self):
         records = [
-            {"text": "a", "type": "QR", "path": "..."},
-            {"text": "b", "type": "Barcode", "path": "..."},
+            {"text": "a", "type": "Q", "path": "..."},
+            {"text": "b", "type": "B", "path": "..."},
         ]
         assert find_index("[QR]  a", records) == 0
         assert find_index("[Barcode]  b", records) == 1
 
     def test_存在しないラベルはマイナス1を返す(self):
-        records = [{"text": "hello", "type": "QR", "path": "..."}]
+        records = [{"text": "hello", "type": "Q", "path": "..."}]
         assert find_index("[QR]  missing", records) == -1
 
     def test_空リストはマイナス1を返す(self):
         assert find_index("[QR]  hello", []) == -1
 
     def test_descriptionありのラベルで検索できる(self):
-        records = [{"text": "https://example.com", "type": "QR",
+        records = [{"text": "https://example.com", "type": "Q",
                     "path": "...", "description": "商品A"}]
         assert find_index("✎[QR]  商品A", records) == 0
 
     def test_ファイル欠損プレフィックス付きでも検索できる(self):
-        records = [{"text": "hello", "type": "QR", "path": "..."}]
+        records = [{"text": "hello", "type": "Q", "path": "..."}]
         assert find_index("⚠[QR]  hello", records) == 0
 
     def test_description付きファイル欠損プレフィックスでも検索できる(self):
-        records = [{"text": "hello", "type": "QR", "path": "...", "description": "説明"}]
+        records = [{"text": "hello", "type": "Q", "path": "...", "description": "説明"}]
         assert find_index("⚠✎[QR]  説明", records) == 0
 
 
@@ -324,9 +324,9 @@ class TestSortRecords:
     @pytest.fixture
     def sample_records(self):
         return [
-            {"text": "charlie", "type": "QR",      "path": "...", "description": ""},
-            {"text": "alice",   "type": "Barcode",  "path": "...", "description": "zzz"},
-            {"text": "bob",     "type": "QR",       "path": "...", "description": "aaa"},
+            {"text": "charlie", "type": "Q", "path": "...", "description": ""},
+            {"text": "alice",   "type": "B", "path": "...", "description": "zzz"},
+            {"text": "bob",     "type": "Q", "path": "...", "description": "aaa"},
         ]
 
     def test_追加日新しい順はindicesが逆順になる(self, sample_records):
@@ -342,7 +342,7 @@ class TestSortRecords:
     def test_表示名昇順はdisplay_text昇順(self, sample_records):
         # _item_label: 0="[QR]  charlie", 1="✎[Barcode]  zzz", 2="✎[QR]  aaa"
         # "[" (U+005B) < "✎" (U+270E) → "[QR]..." が最小
-        # "✎[Barcode]..." < "✎[QR]..." ("b" < "q")
+        # "✎[barcode]..." < "✎[qr]..." (lower: "b" < "q")
         # 昇順: [0, 1, 2]
         indices = [0, 1, 2]
         result = sort_records(sample_records, indices, "label_az")
@@ -381,16 +381,16 @@ class TestSortRecords:
         assert result == [0, 1, 2]
 
     def test_種別QR先はQRが先でBarcodeが後(self, sample_records):
-        # type: 0=QR, 1=Barcode, 2=QR
-        # QR先 = QRが上(先頭), Barcode が下
+        # type: 0=Q, 1=B, 2=Q
+        # QR先 = QR(Q)が上(先頭), B が下
         indices = [0, 1, 2]
         result = sort_records(sample_records, indices, "type_qr")
         assert result[-1] == 1  # Barcode が末尾
         assert set(result[:2]) == {0, 2}  # QR が先頭側
 
     def test_種別Barcode先はBarcodeが先でQRが後(self, sample_records):
-        # type: 0=QR, 1=Barcode, 2=QR
-        # Barcode先 = Barcodeが上(先頭), QR が下
+        # type: 0=Q, 1=B, 2=Q
+        # Barcode先 = Bが上(先頭), Q が下
         indices = [0, 1, 2]
         result = sort_records(sample_records, indices, "type_bc")
         assert result[0] == 1  # Barcode が先頭

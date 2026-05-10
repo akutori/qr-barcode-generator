@@ -38,7 +38,7 @@ def fit_image(path: str, w: int, h: int) -> bytes:
 
 _DEFAULT_SETTINGS: dict = {
     "warn_on_duplicate": True,
-    "default_type": "QR",
+    "default_type": "Q",
     "qr_error_correction": "M",
     "pdf_cols": 3,
     "sort_order": "date_new",
@@ -71,11 +71,15 @@ def save_settings(settings: dict, path: Path) -> None:
         json.dump(settings, f, ensure_ascii=False, indent=2)
 
 
+_TYPE_DISPLAY = {"Q": "QR", "B": "Barcode"}
+
+
 def _type_label(r: dict) -> str:
-    """レコードの種別ラベルを返す。QR は誤り訂正レベルを付加する（例: QR:H）。"""
-    if r["type"] == "QR" and r.get("error_correction"):
-        return f"QR:{r['error_correction']}"
-    return r["type"]
+    """レコードの種別ラベルを返す。Q は誤り訂正レベルを付加する（例: QR:H）。"""
+    disp = _TYPE_DISPLAY.get(r["type"], r["type"])
+    if r["type"] == "Q" and r.get("error_correction"):
+        return f"{disp}:{r['error_correction']}"
+    return disp
 
 
 def has_duplicate(
@@ -91,7 +95,7 @@ def has_duplicate(
     for r in records:
         if r["text"] != text or r["type"] != code_type:
             continue
-        if code_type == "QR" and error_correction is not None and "error_correction" in r:
+        if code_type == "Q" and error_correction is not None and "error_correction" in r:
             if r["error_correction"] != error_correction:
                 continue
         return True
