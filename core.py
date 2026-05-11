@@ -40,6 +40,7 @@ _DEFAULT_SETTINGS: dict = {
     "warn_on_duplicate": True,
     "default_type": "Q",
     "qr_error_correction": "M",
+    "qr_encoding": "UTF-8",
     "pdf_cols": 3,
     "sort_order": "date_new",
 }
@@ -75,10 +76,14 @@ _TYPE_DISPLAY = {"Q": "QR", "B": "Barcode"}
 
 
 def _type_label(r: dict) -> str:
-    """レコードの種別ラベルを返す。Q は誤り訂正レベルを付加する（例: QR:H）。"""
+    """レコードの種別ラベルを返す。Q は誤り訂正レベルとエンコードを付加する（例: QR:H:SJIS）。"""
     disp = _TYPE_DISPLAY.get(r["type"], r["type"])
-    if r["type"] == "Q" and r.get("error_correction"):
-        return f"{disp}:{r['error_correction']}"
+    if r["type"] == "Q":
+        ec = r.get("error_correction", "")
+        suffix = f":{ec}" if ec else ""
+        if r.get("encoding") == "SJIS":
+            suffix += ":SJIS"
+        return f"{disp}{suffix}"
     return disp
 
 
@@ -87,16 +92,22 @@ def has_duplicate(
     code_type: str,
     records: list[dict],
     error_correction: str | None = None,
+    encoding: str | None = None,
 ) -> bool:
-    """完全一致チェック。QR の場合は error_correction も一致するときのみ True。
+    """完全一致チェック。QR の場合は error_correction と encoding も一致するときのみ True。
 
-    レコードに error_correction フィールドがない旧データは保守的に重複と判定する。
+    - error_correction フィールドのない旧レコードは保守的に重複と判定する。
+    - encoding フィールドのない旧レコードは UTF-8 として扱う。
     """
     for r in records:
         if r["text"] != text or r["type"] != code_type:
             continue
         if code_type == "Q" and error_correction is not None and "error_correction" in r:
             if r["error_correction"] != error_correction:
+                continue
+        if code_type == "Q" and encoding is not None:
+            rec_enc = r.get("encoding", "UTF-8")
+            if rec_enc != encoding:
                 continue
         return True
     return False
@@ -130,7 +141,8 @@ def list_labels_with_status(records: list[dict]) -> list[str]:
 
 def find_index(label: str, records: list[dict]) -> int:
     for i, r in enumerate(records):
-        if _item_label(r) == label or f"⚠{_item_label(r)}" == label:
+        base = _item_label(r)
+        if base == label or f"⚠{base}" == label:
             return i
     return -1
 

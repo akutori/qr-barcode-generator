@@ -108,6 +108,19 @@ class TestFilterOverwrite:
         result = _filter_overwrite(records, "hello", "Q", "M")
         assert result == []
 
+    def test_エンコードが異なる場合は除去しない(self):
+        """encoding が UTF-8 のレコードに SJIS で上書きしようとしても除去されない"""
+        records = [{"text": "hello", "type": "Q", "path": "...",
+                    "error_correction": "M", "encoding": "UTF-8"}]
+        result = _filter_overwrite(records, "hello", "Q", "M", encoding="SJIS")
+        assert result == records
+
+    def test_エンコードが一致する場合は除去する(self):
+        """encoding が一致するレコードは上書き対象として除去される"""
+        records = [{"text": "hello", "type": "Q", "path": "...",
+                    "error_correction": "M", "encoding": "SJIS"}]
+        assert _filter_overwrite(records, "hello", "Q", "M", encoding="SJIS") == []
+
 
 # ---------------------------------------------------------------------------
 # 説明コピー文字列取得

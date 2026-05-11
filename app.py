@@ -29,6 +29,7 @@ from csv_import import (
     ParseError,
     RowStatus,
     format_ec_for_display,
+    format_encoding_for_display,
     format_text_for_display,
     generate_template,
     parse_csv,
@@ -71,19 +72,29 @@ _TYPE_DISP: dict[str, str] = {"Q": "QR", "B": "Barcode"}
 
 
 def _filter_overwrite(
-    records: list[dict], text: str, code_type: str, ec: str | None
+    records: list[dict],
+    text: str,
+    code_type: str,
+    ec: str | None,
+    encoding: str | None = None,
 ) -> list[dict]:
     """上書きモード時に対象レコードを除去した新しいリストを返す。
 
-    QR の場合: ec が一致するレコード、および ec フィールドなしの旧レコードを除去する。
-    has_duplicate が旧レコードを重複と判定するため、上書き時も除去して一貫性を保つ。
+    QR の場合: ec と encoding が一致するレコード、および ec フィールドなしの旧レコードを除去する。
+    encoding=None のとき encoding チェックはスキップ（既存動作と互換）。
     """
     def _matches(r: dict) -> bool:
         if r["text"] != text or r["type"] != code_type:
             return False
         if code_type != "Q":
             return True
-        return r.get("error_correction") == ec or "error_correction" not in r
+        if "error_correction" in r and r["error_correction"] != ec:
+            return False
+        if encoding is not None:
+            rec_enc = r.get("encoding", "UTF-8")
+            if rec_enc != encoding:
+                return False
+        return True
 
     return [r for r in records if not _matches(r)]
 
@@ -170,7 +181,7 @@ class App:
         self.root = root
         self.root.title("QR & バーコード 生成ツール")
         self.root.minsize(WIN_MIN_W, WIN_MIN_H)
-        self.root.geometry("730x480")
+        self.root.geometry("730x510")
 
         SAVE_DIR.mkdir(exist_ok=True)
         self.records = self._load_metadata_safe()
@@ -331,11 +342,11 @@ class App:
         hint_f = tk.Frame(dlg)
         hint_f.pack(fill="x", padx=8, pady=(0, 2))
         tk.Label(hint_f,
-                 text="種別: QR（または Q）/ Barcode（または B）  ｜  誤り訂正レベル: L / M / Q / H（空欄=M、Barcode は無視）",
+                 text="種別: QR（または Q）/ Barcode（または B）  ｜  誤り訂正: L / M / Q / H（空欄=M）  ｜  エンコード: UTF-8 / SJIS（省略=UTF-8）",
                  font=(_FONT, 8), fg="#666666", anchor="w").pack(fill="x")
 
         # ── プレビュー（Treeview）────────────────────────────────────────────
-        cols = ("status", "type", "text", "description", "ec", "error")
+        cols = ("status", "type", "text", "description", "ec", "encoding", "error")
         tree_f = tk.Frame(dlg)
         tree_f.pack(fill="both", expand=True, padx=8, pady=4)
 
@@ -348,18 +359,20 @@ class App:
         vsb.config(command=tree.yview)
         hsb.config(command=tree.xview)
 
-        tree.heading("status", text="状態")
-        tree.heading("type",   text="種別")
-        tree.heading("text",   text="テキスト")
+        tree.heading("status",   text="状態")
+        tree.heading("type",     text="種別")
+        tree.heading("text",     text="テキスト")
         tree.heading("description", text="説明")
-        tree.heading("ec",     text="誤り訂正")
-        tree.heading("error",  text="エラー詳細")
-        tree.column("status", width=50,  stretch=False, anchor="center")
-        tree.column("type",   width=70,  stretch=False, anchor="center")
-        tree.column("text",   width=250, stretch=False)
-        tree.column("description", width=130, stretch=False)
-        tree.column("ec",     width=70,  stretch=False, anchor="center")
-        tree.column("error",  width=280, stretch=False)
+        tree.heading("ec",       text="誤り訂正")
+        tree.heading("encoding", text="エンコード")
+        tree.heading("error",    text="エラー詳細")
+        tree.column("status",   width=50,  stretch=False, anchor="center")
+        tree.column("type",     width=70,  stretch=False, anchor="center")
+        tree.column("text",     width=220, stretch=False)
+        tree.column("description", width=110, stretch=False)
+        tree.column("ec",       width=60,  stretch=False, anchor="center")
+        tree.column("encoding", width=70,  stretch=False, anchor="center")
+        tree.column("error",    width=240, stretch=False)
         tree.pack(fill="both", expand=True)
         tree.tag_configure("ok",  background="#e8f5e9")
         tree.tag_configure("dup", background="#fff9c4")
@@ -380,7 +393,8 @@ class App:
                 tree.insert("", "end", tags=(tag,), values=(
                     icon, _TYPE_DISP.get(r.code_type, r.code_type),
                     text_disp, r.description,
-                    format_ec_for_display(r), r.error_msg,
+                    format_ec_for_display(r), format_encoding_for_display(r),
+                    r.error_msg,
                 ))
             total = len(_rows)
             summary_var.set(
@@ -404,18 +418,21 @@ class App:
                     elif mode == "overwrite":
                         # 既存レコードを削除してから追加
                         ec = row.error_correction if row.code_type == "Q" else None
+                        enc = row.encoding if row.code_type == "Q" else None
                         self.records = _filter_overwrite(
-                            self.records, row.text, row.code_type, ec
+                            self.records, row.text, row.code_type, ec, encoding=enc
                         )
                     # mode == "add": 何もしない → そのまま追加処理へ
                 ts = f"{ts_base}_{i:04d}"
                 try:
                     if row.code_type == "Q":
                         fp = SAVE_DIR / f"qr_{ts}.png"
-                        generate_qr(row.text, fp, error_correction=row.error_correction)
+                        generate_qr(row.text, fp, error_correction=row.error_correction,
+                                    encoding=row.encoding)
                         rec: dict = {
                             "text": row.text, "type": row.code_type,
                             "path": str(fp), "error_correction": row.error_correction,
+                            "encoding": row.encoding,
                         }
                     else:
                         fp = generate_barcode_file(row.text, SAVE_DIR / f"bar_{ts}")
@@ -451,6 +468,7 @@ class App:
                 self.qr_text.delete("1.0", "end")
                 self.qr_text.insert("1.0", current)
             self._ec_frame.pack(fill="x", pady=(0, 4), after=self._radio_f)
+            self._enc_frame.pack(fill="x", pady=(0, 4), after=self._ec_frame)
         else:
             # Q → B: qr_text の先頭行を Entry に引き継いで切り替え
             first_line = self.qr_text.get("1.0", "end-1c").split("\n")[0].strip()
@@ -458,11 +476,16 @@ class App:
             self.entry.pack(fill="x")     # コンテナ内のため before= 不要
             self.entry_var.set(first_line)
             self._ec_frame.pack_forget()
+            self._enc_frame.pack_forget()
         self.settings["default_type"] = t
         save_settings(self.settings, SETTINGS_FILE)
 
     def _on_ec_change(self, *_) -> None:
         self.settings["qr_error_correction"] = self._ec_var.get()
+        save_settings(self.settings, SETTINGS_FILE)
+
+    def _on_enc_change(self, *_) -> None:
+        self.settings["qr_encoding"] = self._enc_var.get()
         save_settings(self.settings, SETTINGS_FILE)
 
     def _on_pdf_cols_change(self, *_) -> None:
@@ -559,6 +582,20 @@ class App:
                  font=(_FONT, 8), fg="gray").pack(side="left", padx=(6, 0))
         if self.type_var.get() == "Q":
             self._ec_frame.pack(fill="x", pady=(0, 4))
+
+        # エンコード（QR 選択時のみ表示）
+        self._enc_frame = tk.Frame(lf)
+        self._enc_var = tk.StringVar(value=self.settings.get("qr_encoding", "UTF-8"))
+        self._enc_var.trace_add("write", self._on_enc_change)
+        tk.Label(self._enc_frame, text="エンコード:",
+                 font=(_FONT, 9), fg="gray").pack(side="left")
+        ttk.Combobox(self._enc_frame, textvariable=self._enc_var,
+                     values=["UTF-8", "SJIS"], width=6,
+                     state="readonly", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
+        tk.Label(self._enc_frame, text="SJIS=業務スキャナー向け",
+                 font=(_FONT, 8), fg="gray").pack(side="left", padx=(6, 0))
+        if self.type_var.get() == "Q":
+            self._enc_frame.pack(fill="x", pady=(0, 4))
 
         tk.Button(lf, text="生成して保存", font=(_FONT, 11, "bold"),
                   command=self.on_generate).pack(fill="x", pady=(0, 8))
@@ -760,13 +797,18 @@ class App:
         )
 
     def _show_list_tooltip(self, rec: dict, x: int, y: int) -> None:
-        """生成済一覧ホバー時のツールチップ。説明があれば説明＋元テキストを、なければ元テキストを表示。"""
+        """生成済一覧ホバー時のツールチップ。説明があれば説明＋元テキストを、なければ元テキストを表示。
+        SJIS エンコードの場合はその旨を先頭に表示する。
+        """
+        lines = []
+        if rec.get("encoding") == "SJIS":
+            lines.append("エンコード: Shift-JIS")
         desc = rec.get("description", "")
         if desc:
-            text = f"{desc}\n{'─' * 28}\n{rec['text']}"
+            lines.extend([desc, "─" * 28, rec["text"]])
         else:
-            text = rec["text"]
-        self._show_tooltip(text, x, y)
+            lines.append(rec["text"])
+        self._show_tooltip("\n".join(lines), x, y)
 
     def _show_tooltip(self, text: str, x: int, y: int) -> None:
         lines = text.split("\n")
@@ -952,7 +994,10 @@ class App:
             return
 
         ec = self._ec_var.get() if code_type == "Q" else None
-        if self.settings.get("warn_on_duplicate", True) and has_duplicate(text, code_type, self.records, error_correction=ec):
+        enc = self._enc_var.get() if code_type == "Q" else None
+        if self.settings.get("warn_on_duplicate", True) and has_duplicate(
+            text, code_type, self.records, error_correction=ec, encoding=enc
+        ):
             if not self._ask_duplicate(text, code_type, error_correction=ec):
                 return
 
@@ -960,9 +1005,11 @@ class App:
         try:
             if code_type == "Q":
                 fp = SAVE_DIR / f"qr_{ts}.png"
-                generate_qr(text, fp, error_correction=self._ec_var.get())
+                generate_qr(text, fp, error_correction=self._ec_var.get(),
+                            encoding=self._enc_var.get())
                 rec = {"text": text, "type": code_type, "path": str(fp),
-                       "error_correction": self._ec_var.get()}
+                       "error_correction": self._ec_var.get(),
+                       "encoding": self._enc_var.get()}
             else:
                 fp = generate_barcode_file(text, SAVE_DIR / f"bar_{ts}")
                 rec = {"text": text, "type": code_type, "path": str(fp)}

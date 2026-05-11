@@ -10,6 +10,14 @@ from barcode.writer import ImageWriter
 
 _EC_MAP = {"L": "l", "M": "m", "Q": "q", "H": "h"}
 
+# 誤り訂正レベルごとの最大容量（英数字 / バイナリ）
+_EC_CAPACITY: dict[str, tuple[str, str]] = {
+    "L": ("4,296文字", "2,953バイト"),
+    "M": ("3,391文字", "2,331バイト"),
+    "Q": ("2,420文字", "1,663バイト"),
+    "H": ("1,852文字", "1,273バイト"),
+}
+
 _FONT_CANDIDATES: list[str] = []
 if sys.platform == "win32":
     _FONT_CANDIDATES = [
@@ -43,15 +51,32 @@ def _load_font(size: int = 14) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         return ImageFont.load_default()
 
 
-def generate_qr(text: str, filepath: Path, error_correction: str = "M") -> None:
+def generate_qr(
+    text: str,
+    filepath: Path,
+    error_correction: str = "M",
+    encoding: str = "UTF-8",
+) -> None:
     ec = _EC_MAP.get(error_correction, "m")
+    codec = "cp932" if encoding == "SJIS" else "utf-8"
     try:
-        qr = segno.make(text, encoding="utf-8", eci=True, error=ec)
-    except segno.encoder.DataOverflowError as e:
+        data = text.encode(codec)
+    except UnicodeEncodeError:
         raise ValueError(
-            f"テキストが長すぎてQRコードに収まりません。\n"
-            f"上限の目安: 英数字 4,296文字 / バイナリ 2,953バイト\n"
-            f"入力サイズ: {len(text.encode())} バイト"
+            "テキストに Shift-JIS で表現できない文字が含まれています。"
+            "（絵文字や一部の Unicode 文字は Shift-JIS では使用できません）"
+        )
+    try:
+        # eci=True は Micro QR や ECI 非対応スキャナーで文字化けを引き起こすため不使用。
+        # バイト列を make_qr に直接渡してフル QR バイトモードで生成する。
+        qr = segno.make_qr(data, error=ec)
+    except segno.encoder.DataOverflowError as e:
+        alphanum, binary = _EC_CAPACITY.get(error_correction, ("4,296文字", "2,953バイト"))
+        enc_label = "SJIS" if encoding == "SJIS" else "UTF-8"
+        raise ValueError(
+            f"テキストが長すぎてQRコードに収まりません（エンコード: {enc_label}）。\n"
+            f"誤り訂正レベル {error_correction}: 英数字 {alphanum} / バイナリ {binary}\n"
+            f"入力サイズ: {len(data)} バイト"
         ) from e
     buf = BytesIO()
     qr.save(buf, kind="png", scale=10, border=4)

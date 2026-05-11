@@ -46,6 +46,20 @@ class TestGenerateQR:
         generate_qr("日本語テスト", fp)
         assert fp.exists()
 
+    def test_日本語QRはフルQRのバイトモードで生成される(self, tmp_path):
+        """ECI モードや Micro QR はスキャナー非対応端末で文字化けを引き起こす。
+        UTF-8 バイト列を make_qr に直接渡してフル QR バイトモードで生成すること。
+        """
+        import segno as _segno
+        text = "あ"  # 3 bytes: eci=True だと Micro QR M3(230px) になる
+        fp = tmp_path / "jp_full.png"
+        generate_qr(text, fp)
+        img = Image.open(str(fp))
+        expected_qr = _segno.make_qr(text.encode("utf-8"), error="m")
+        assert not expected_qr.is_micro
+        expected_w = expected_qr.symbol_size(scale=10, border=4)[0]
+        assert img.width == expected_w
+
     def test_誤り訂正レベルLでファイルが生成される(self, tmp_path):
         fp = tmp_path / "qr_L.png"
         generate_qr("hello", fp, error_correction="L")
@@ -79,9 +93,9 @@ class TestGenerateQR:
     def test_改行を含むQRのラベルは先頭行のみ表示される(self, tmp_path):
         """複数行テキストのラベルは先頭行のみ描画され、ラベル領域が増加しない。
 
-        小文字 "a" は英数字モード対象外のためバイトモード (Micro QR M3) になる。
-        "a\nb\nc" も同様に M3 となり、両者の QR 本体サイズが等しくなる。
-        ラベルが多行分増えなければ総高さも等しくなる。
+        make_qr(bytes) を使うためフル QR V1 で生成される。
+        "a" (1 バイト) と "a\nb\nc" (5 バイト) はどちらも V1 の容量に収まるため
+        QR 本体サイズが等しくなる。ラベルが多行分増えなければ総高さも等しくなる。
         """
         fp_single = tmp_path / "qr_single.png"
         fp_multi = tmp_path / "qr_multi.png"
@@ -92,12 +106,60 @@ class TestGenerateQR:
         assert h_multi == h_single
 
     def test_テキストが長すぎる場合はValueErrorを送出する(self, tmp_path):
-        """QR バイナリ上限 (2,953 バイト) を超えるテキストは ValueError になる。
-        CLAUDE.md: "version" を含むエラーメッセージをキャッチして日本語メッセージに変換する
+        """QR 上限を超えるテキストは ValueError になる。
+        segno.encoder.DataOverflowError をキャッチして日本語メッセージに変換する。
         """
         text = "A" * 5000
         with pytest.raises(ValueError, match="長すぎて"):
             generate_qr(text, tmp_path / "qr.png")
+
+    def test_オーバーフロー時のエラーメッセージに誤り訂正レベルが含まれる(self, tmp_path):
+        """エラーメッセージに使用した誤り訂正レベルが含まれることで、
+        ユーザーがレベルを下げれば収まるかを判断できる。
+        """
+        text = "A" * 5000
+        with pytest.raises(ValueError) as exc_info:
+            generate_qr(text, tmp_path / "qr.png", error_correction="H")
+        assert "H" in str(exc_info.value)
+
+    def test_オーバーフロー時のエラーメッセージにUTF8バイト数が含まれる(self, tmp_path):
+        """エラーメッセージに入力バイト数が含まれることで、
+        ユーザーが入力サイズを把握できる。
+        """
+        text = "あ" * 2000  # 6000 bytes UTF-8
+        with pytest.raises(ValueError) as exc_info:
+            generate_qr(text, tmp_path / "qr.png")
+        byte_count = str(len(text.encode("utf-8")))
+        assert byte_count in str(exc_info.value)
+
+    def test_SJIS指定でファイルが生成される(self, tmp_path):
+        fp = tmp_path / "jp_sjis.png"
+        generate_qr("日本語テスト", fp, encoding="SJIS")
+        assert fp.exists()
+
+    def test_SJIS指定はUTF8指定より画像が小さいまたは同等(self, tmp_path):
+        """日本語は SJIS(2 バイト/文字) の方が UTF-8(3 バイト/文字) より小さいので
+        同じテキストで SJIS QR のシンボルサイズが UTF-8 以下になる。
+        """
+        text = "日本語テスト" * 5  # 30文字 = SJIS60B / UTF-8 90B
+        fp_utf8 = tmp_path / "utf8.png"
+        fp_sjis = tmp_path / "sjis.png"
+        generate_qr(text, fp_utf8, encoding="UTF-8")
+        generate_qr(text, fp_sjis, encoding="SJIS")
+        assert Image.open(str(fp_sjis)).width <= Image.open(str(fp_utf8)).width
+
+    def test_SJIS非対応文字はValueErrorを送出する(self, tmp_path):
+        """Shift-JIS で表現できない文字（一部 Unicode のみの文字）はエラーにする。"""
+        text = "🎉"  # 絵文字は cp932 に存在しない
+        with pytest.raises(ValueError, match="Shift-JIS"):
+            generate_qr(text, tmp_path / "qr.png", encoding="SJIS")
+
+    def test_オーバーフロー時のエラーメッセージにエンコード名が含まれる(self, tmp_path):
+        """SJIS モードでオーバーフローした場合、エラーメッセージにエンコード名が含まれる。"""
+        text = "あ" * 3000  # SJIS では 6000B、いずれにせよ上限超え
+        with pytest.raises(ValueError) as exc_info:
+            generate_qr(text, tmp_path / "qr.png", encoding="SJIS")
+        assert "SJIS" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------

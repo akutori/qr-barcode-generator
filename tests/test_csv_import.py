@@ -10,6 +10,7 @@ from csv_import import (
     ParseError,
     RowStatus,
     format_ec_for_display,
+    format_encoding_for_display,
     format_text_for_display,
     generate_template,
     parse_csv,
@@ -47,7 +48,7 @@ class TestGenerateTemplate:
     def test_ヘッダー行を含む(self):
         t = generate_template()
         lines = t.splitlines()
-        assert lines[0] == "text,type,description,error_correction"
+        assert lines[0] == "text,type,description,error_correction,encoding"
 
     def test_サンプルデータを2行含む(self):
         t = generate_template()
@@ -416,3 +417,86 @@ class TestFormatEcForDisplay:
 
     def test_ERRORステータスのBarcodeはダッシュを返す(self):
         assert format_ec_for_display(self._bc("", RowStatus.ERROR)) == "—"
+
+
+# ---------------------------------------------------------------------------
+# format_encoding_for_display
+# ---------------------------------------------------------------------------
+
+class TestFormatEncodingForDisplay:
+    def _qr(self, enc: str = "UTF-8") -> ImportRow:
+        return ImportRow(line_no=2, text="t", code_type="Q",
+                         description="", error_correction="M", encoding=enc)
+
+    def _bc(self) -> ImportRow:
+        return ImportRow(line_no=2, text="t", code_type="B",
+                         description="", error_correction="")
+
+    def test_QRはUTF8を返す(self):
+        assert format_encoding_for_display(self._qr("UTF-8")) == "UTF-8"
+
+    def test_QRはSJISを返す(self):
+        assert format_encoding_for_display(self._qr("SJIS")) == "SJIS"
+
+    def test_Barcodeはダッシュを返す(self):
+        assert format_encoding_for_display(self._bc()) == "—"
+
+
+# ---------------------------------------------------------------------------
+# parse_csv — encoding 列
+# ---------------------------------------------------------------------------
+
+class TestParseCsvEncoding:
+    def test_5列目のencoding列UTF8を読み込める(self, tmp_path):
+        p = _write_csv(tmp_path,
+            VALID_HEADER.rstrip() + ",encoding\n"
+            "https://example.com,QR,,M,UTF-8\n")
+        rows = parse_csv(p)
+        assert rows[0].encoding == "UTF-8"
+
+    def test_5列目のencoding列SJISを読み込める(self, tmp_path):
+        p = _write_csv(tmp_path,
+            VALID_HEADER.rstrip() + ",encoding\n"
+            "日本語,QR,,M,SJIS\n")
+        rows = parse_csv(p)
+        assert rows[0].encoding == "SJIS"
+
+    def test_encoding列が省略された場合はUTF8になる(self, tmp_path):
+        p = _write_csv(tmp_path, VALID_HEADER + VALID_ROW_QR)
+        rows = parse_csv(p)
+        assert rows[0].encoding == "UTF-8"
+
+    def test_4列CSVは後方互換でencoding列なしでもOK(self, tmp_path):
+        """旧フォーマット（4列）は encoding="UTF-8" として読み込める。"""
+        p = _write_csv(tmp_path, VALID_HEADER + VALID_ROW_QR)
+        rows = parse_csv(p)
+        assert rows[0].status == RowStatus.OK
+        assert rows[0].encoding == "UTF-8"
+
+    def test_SHIFT_JIS表記もSJISに正規化される(self, tmp_path):
+        p = _write_csv(tmp_path,
+            VALID_HEADER.rstrip() + ",encoding\n"
+            "日本語,QR,,M,SHIFT-JIS\n")
+        rows = parse_csv(p)
+        assert rows[0].encoding == "SJIS"
+
+    def test_無効なencoding値はERRORステータス(self, tmp_path):
+        p = _write_csv(tmp_path,
+            VALID_HEADER.rstrip() + ",encoding\n"
+            "hello,QR,,M,ISO-8859-1\n")
+        rows = parse_csv(p)
+        assert rows[0].status == RowStatus.ERROR
+
+
+class TestValidateRowEncoding:
+    def test_SJISで表現できない文字はERRORステータス(self):
+        row = ImportRow(line_no=2, text="🎉", code_type="Q",
+                        description="", error_correction="M", encoding="SJIS")
+        result = validate_row(row, [])
+        assert result.status == RowStatus.ERROR
+
+    def test_SJISで表現できる日本語はOK(self):
+        row = ImportRow(line_no=2, text="日本語テスト", code_type="Q",
+                        description="", error_correction="M", encoding="SJIS")
+        result = validate_row(row, [])
+        assert result.status == RowStatus.OK

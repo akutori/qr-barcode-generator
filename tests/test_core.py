@@ -114,6 +114,28 @@ class TestHasDuplicate:
         records = [{"text": "hello", "type": "Q", "path": "qr.png"}]
         assert has_duplicate("hello", "Q", records, error_correction="H") is True
 
+    def test_同じテキストでエンコードが異なる場合はDuplicateにならない(self):
+        """UTF-8 と SJIS は異なる QR なので重複にならない"""
+        records = [{"text": "日本語", "type": "Q", "path": "qr.png",
+                    "error_correction": "M", "encoding": "UTF-8"}]
+        assert has_duplicate("日本語", "Q", records,
+                             error_correction="M", encoding="SJIS") is False
+
+    def test_同じテキストとエンコードが一致する場合はDuplicate(self):
+        records = [{"text": "日本語", "type": "Q", "path": "qr.png",
+                    "error_correction": "M", "encoding": "SJIS"}]
+        assert has_duplicate("日本語", "Q", records,
+                             error_correction="M", encoding="SJIS") is True
+
+    def test_encodingフィールドなし旧レコードはUTF8として扱われる(self):
+        """encoding フィールドのない旧レコードは UTF-8 として扱う"""
+        records = [{"text": "hello", "type": "Q", "path": "qr.png",
+                    "error_correction": "M"}]
+        assert has_duplicate("hello", "Q", records,
+                             error_correction="M", encoding="UTF-8") is True
+        assert has_duplicate("hello", "Q", records,
+                             error_correction="M", encoding="SJIS") is False
+
 
 # ---------------------------------------------------------------------------
 # 画像ユーティリティ
@@ -242,6 +264,22 @@ class TestListLabels:
     def test_誤り訂正レベルのないQRは従来フォーマットで返す(self):
         records = [{"text": "hello", "type": "Q", "path": "..."}]
         assert list_labels(records) == ["[QR]  hello"]
+
+    def test_SJISレコードのtype_labelはSJISサフィックスが付く(self):
+        records = [{"text": "日本語", "type": "Q", "path": "...",
+                    "error_correction": "M", "encoding": "SJIS"}]
+        assert list_labels(records) == ["[QR:M:SJIS]  日本語"]
+
+    def test_UTF8レコードのtype_labelにSJISサフィックスは付かない(self):
+        records = [{"text": "日本語", "type": "Q", "path": "...",
+                    "error_correction": "M", "encoding": "UTF-8"}]
+        assert list_labels(records) == ["[QR:M]  日本語"]
+
+    def test_encodingフィールドなし旧レコードはSJISサフィックスなし(self):
+        """encoding フィールドのない旧レコードは UTF-8 扱いでサフィックスなし"""
+        records = [{"text": "hello", "type": "Q", "path": "...",
+                    "error_correction": "M"}]
+        assert list_labels(records) == ["[QR:M]  hello"]
 
     def test_descriptionがある場合はえんぴつプレフィックスと説明文で表示される(self):
         records = [{"text": "https://example.com", "type": "Q",
