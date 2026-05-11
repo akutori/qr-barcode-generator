@@ -1,18 +1,14 @@
 import sys
 from pathlib import Path
 
+from io import BytesIO
+
 import barcode
-import qrcode
-import qrcode.constants
+import segno
 from PIL import Image, ImageDraw, ImageFont
 from barcode.writer import ImageWriter
 
-_EC_MAP = {
-    "L": qrcode.constants.ERROR_CORRECT_L,
-    "M": qrcode.constants.ERROR_CORRECT_M,
-    "Q": qrcode.constants.ERROR_CORRECT_Q,
-    "H": qrcode.constants.ERROR_CORRECT_H,
-}
+_EC_MAP = {"L": "l", "M": "m", "Q": "q", "H": "h"}
 
 _FONT_CANDIDATES: list[str] = []
 if sys.platform == "win32":
@@ -48,29 +44,31 @@ def _load_font(size: int = 14) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 
 def generate_qr(text: str, filepath: Path, error_correction: str = "M") -> None:
-    ec = _EC_MAP.get(error_correction, qrcode.constants.ERROR_CORRECT_M)
+    ec = _EC_MAP.get(error_correction, "m")
     try:
-        qr = qrcode.make(text, error_correction=ec).convert("RGB")
-    except Exception as e:
-        if "version" in str(e).lower():
-            raise ValueError(
-                f"テキストが長すぎてQRコードに収まりません。\n"
-                f"上限の目安: 英数字 4,296文字 / バイナリ 2,953バイト\n"
-                f"入力サイズ: {len(text.encode())} バイト"
-            ) from e
-        raise
+        qr = segno.make(text, encoding="utf-8", eci=True, error=ec)
+    except segno.encoder.DataOverflowError as e:
+        raise ValueError(
+            f"テキストが長すぎてQRコードに収まりません。\n"
+            f"上限の目安: 英数字 4,296文字 / バイナリ 2,953バイト\n"
+            f"入力サイズ: {len(text.encode())} バイト"
+        ) from e
+    buf = BytesIO()
+    qr.save(buf, kind="png", scale=10, border=4)
+    buf.seek(0)
+    qr_img = Image.open(buf).convert("RGB")
 
     font = _load_font(14)
     text_h = 24
-    canvas = Image.new("RGB", (qr.width, qr.height + text_h), (255, 255, 255))
-    canvas.paste(qr, (0, 0))
+    canvas = Image.new("RGB", (qr_img.width, qr_img.height + text_h), (255, 255, 255))
+    canvas.paste(qr_img, (0, 0))
 
     # 複数行テキストの場合はラベルを先頭行のみ表示（領域が固定 24px のため）
     label = _truncate_label(text.split("\n")[0])
     draw = ImageDraw.Draw(canvas)
     bbox = draw.textbbox((0, 0), label, font=font)
     x = (canvas.width - (bbox[2] - bbox[0])) // 2
-    y = qr.height + (text_h - (bbox[3] - bbox[1])) // 2
+    y = qr_img.height + (text_h - (bbox[3] - bbox[1])) // 2
     draw.text((x, y), label, fill=(0, 0, 0), font=font)
 
     canvas.save(str(filepath))

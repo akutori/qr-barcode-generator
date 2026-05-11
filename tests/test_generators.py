@@ -79,13 +79,14 @@ class TestGenerateQR:
     def test_改行を含むQRのラベルは先頭行のみ表示される(self, tmp_path):
         """複数行テキストのラベルは先頭行のみ描画され、ラベル領域が増加しない。
 
-        "A"(1 byte) と "A\\nB\\nC"(5 bytes) はどちらも QR version 1(M) に収まるため
-        QR 本体サイズが等しく、ラベルが多行分増えなければ総高さも等しくなる。
+        小文字 "a" は英数字モード対象外のためバイトモード (Micro QR M3) になる。
+        "a\nb\nc" も同様に M3 となり、両者の QR 本体サイズが等しくなる。
+        ラベルが多行分増えなければ総高さも等しくなる。
         """
         fp_single = tmp_path / "qr_single.png"
         fp_multi = tmp_path / "qr_multi.png"
-        generate_qr("A", fp_single)
-        generate_qr("A\nB\nC", fp_multi)
+        generate_qr("a", fp_single)
+        generate_qr("a\nb\nc", fp_multi)
         h_single = Image.open(str(fp_single)).height
         h_multi = Image.open(str(fp_multi)).height
         assert h_multi == h_single
