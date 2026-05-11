@@ -12,6 +12,9 @@
 
 - QR コード / バーコード (Code128) を PNG 保存
 - QR: 誤り訂正レベル選択（L / M / Q / H）
+- QR: エンコード選択（UTF-8 / Shift-JIS）
+  - Inateck BCST-72 等の業務スキャナーは QR バイト列を Shift-JIS として解釈するため、日本語 QR は SJIS 推奨
+  - スマートフォンカメラなど標準的な用途は UTF-8 のまま使用可
 - QR: 複数行テキスト対応（改行を含む QR コード生成可）
 - Barcode: ASCII 文字のみ対応
 
@@ -31,6 +34,7 @@
 - CSV 一括インポート（CSV / テキストファイルから複数コードをまとめて生成）
   - `type` 列に `QR` または `Q`（QR コード）、`BARCODE` または `B`（バーコード）を指定（大文字小文字不問）
   - `error_correction` 列に `L` / `M` / `Q` / `H` を指定（省略時は `M`、バーコード時は無視）
+  - `encoding` 列に `UTF-8` または `SJIS` を指定（省略時は `UTF-8`、バーコード時は無視）
 - PDF 出力後に自動でファイルを開くオプション
 
 ### その他
@@ -95,6 +99,6 @@ QR-Barcode-GUI/
 
 | ライブラリ | 用途 |
 |---|---|
-| [qrcode](https://github.com/lincolnloop/python-qrcode) | QR コード生成 |
+| [segno](https://github.com/heuer/segno) | QR コード生成 |
 | [python-barcode](https://github.com/WhyNotHugo/python-barcode) | バーコード生成 |
 | [Pillow](https://python-pillow.org/) | 画像描画・表示・PDF 出力 |
