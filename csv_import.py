@@ -38,7 +38,6 @@ _ENCODING_ALIASES: dict[str, str] = {
     "SHIFT-JIS": "SJIS",
     "SHIFT_JIS": "SJIS",
 }
-_VALID_ENCODINGS = {"UTF-8", "SJIS"}
 
 _EC_MAP = {"L": "l", "M": "m", "Q": "q", "H": "h"}
 
@@ -102,8 +101,6 @@ def generate_template() -> str:
 # ---------------------------------------------------------------------------
 
 _REQUIRED_HEADERS = ["text", "type", "description", "error_correction"]
-_OPTIONAL_HEADERS = ["encoding"]
-_ALL_HEADERS = _REQUIRED_HEADERS + _OPTIONAL_HEADERS
 
 
 def parse_csv(path: Path) -> list[ImportRow]:
@@ -233,15 +230,6 @@ def validate_row(row: ImportRow, existing_records: list[dict]) -> ImportRow:
         return row
 
     if row.code_type == "Q":
-        # SJIS モードの場合、エンコード可否を先にチェック
-        if row.encoding == "SJIS":
-            try:
-                row.text.encode("cp932")
-            except UnicodeEncodeError:
-                return dataclasses.replace(
-                    row, status=RowStatus.ERROR,
-                    error_msg="テキストに Shift-JIS で表現できない文字が含まれています。",
-                )
         err = _check_qr_capacity(row.text, row.error_correction, row.encoding)
         if err:
             return dataclasses.replace(row, status=RowStatus.ERROR, error_msg=err)
@@ -269,21 +257,19 @@ def _check_qr_capacity(
 ) -> str:
     """QR コードにデータが収まるか確認する（画像生成なし）。
     収まらない場合はエラーメッセージを返す。収まる場合は空文字を返す。
+    SJIS で表現できない文字もここで検出する。
     """
     codec = "cp932" if encoding == "SJIS" else "utf-8"
     ec = _EC_MAP.get(error_correction, "m")
     try:
         data = text.encode(codec)
-        segno.make_qr(data, error=ec)
-        return ""
     except UnicodeEncodeError:
         return "テキストに Shift-JIS で表現できない文字が含まれています。"
+    try:
+        segno.make_qr(data, error=ec)
+        return ""
     except segno.encoder.DataOverflowError:
-        byte_len = len(text.encode(codec, errors="replace"))
-        return (
-            f"テキストが長すぎてQRコードに収まりません。"
-            f"（{byte_len} バイト）"
-        )
+        return f"テキストが長すぎてQRコードに収まりません。（{len(data)} バイト）"
 
 
 def validate_all(

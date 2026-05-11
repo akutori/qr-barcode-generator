@@ -127,12 +127,17 @@ class TestHasDuplicate:
         assert has_duplicate("日本語", "Q", records,
                              error_correction="M", encoding="SJIS") is True
 
-    def test_encodingフィールドなし旧レコードはUTF8として扱われる(self):
+    def test_encodingフィールドなし旧レコードはUTF8として扱い一致する場合はDuplicate(self):
         """encoding フィールドのない旧レコードは UTF-8 として扱う"""
         records = [{"text": "hello", "type": "Q", "path": "qr.png",
                     "error_correction": "M"}]
         assert has_duplicate("hello", "Q", records,
                              error_correction="M", encoding="UTF-8") is True
+
+    def test_encodingフィールドなし旧レコードはUTF8として扱いSJIS指定では一致しない(self):
+        """encoding フィールドのない旧レコードは UTF-8 扱いなので SJIS とは重複しない"""
+        records = [{"text": "hello", "type": "Q", "path": "qr.png",
+                    "error_correction": "M"}]
         assert has_duplicate("hello", "Q", records,
                              error_correction="M", encoding="SJIS") is False
 

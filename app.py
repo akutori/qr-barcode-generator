@@ -22,8 +22,6 @@ from core import (
     save_settings,
     sort_records,
 )
-
-_SORT_LABEL_TO_KEY: dict[str, str] = {v: k for k, v in SORT_OPTION_LABELS.items()}
 from csv_import import (
     ImportRow,
     ParseError,
@@ -36,6 +34,9 @@ from csv_import import (
     validate_all,
 )
 from generators import generate_barcode_file, generate_pdf_grid, generate_qr
+
+_SORT_LABEL_TO_KEY: dict[str, str] = {v: k for k, v in SORT_OPTION_LABELS.items()}
+
 
 def _read_version() -> str:
     """pyproject.toml からバージョンを読む。開発時・PyInstaller exe 時いずれも対応。"""

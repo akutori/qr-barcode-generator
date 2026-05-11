@@ -1,7 +1,6 @@
 import sys
-from pathlib import Path
-
 from io import BytesIO
+from pathlib import Path
 
 import barcode
 import segno
@@ -18,9 +17,8 @@ _EC_CAPACITY: dict[str, tuple[str, str]] = {
     "H": ("1,852文字", "1,273バイト"),
 }
 
-_FONT_CANDIDATES: list[str] = []
 if sys.platform == "win32":
-    _FONT_CANDIDATES = [
+    _FONT_CANDIDATES: list[str] = [
         "C:/Windows/Fonts/meiryo.ttc",
         "C:/Windows/Fonts/msgothic.ttc",
         "C:/Windows/Fonts/YuGothM.ttc",
@@ -72,9 +70,8 @@ def generate_qr(
         qr = segno.make_qr(data, error=ec)
     except segno.encoder.DataOverflowError as e:
         alphanum, binary = _EC_CAPACITY.get(error_correction, ("4,296文字", "2,953バイト"))
-        enc_label = "SJIS" if encoding == "SJIS" else "UTF-8"
         raise ValueError(
-            f"テキストが長すぎてQRコードに収まりません（エンコード: {enc_label}）。\n"
+            f"テキストが長すぎてQRコードに収まりません（エンコード: {encoding}）。\n"
             f"誤り訂正レベル {error_correction}: 英数字 {alphanum} / バイナリ {binary}\n"
             f"入力サイズ: {len(data)} バイト"
         ) from e

@@ -102,13 +102,13 @@ def has_duplicate(
     for r in records:
         if r["text"] != text or r["type"] != code_type:
             continue
-        if code_type == "Q" and error_correction is not None and "error_correction" in r:
-            if r["error_correction"] != error_correction:
-                continue
-        if code_type == "Q" and encoding is not None:
-            rec_enc = r.get("encoding", "UTF-8")
-            if rec_enc != encoding:
-                continue
+        if code_type == "Q":
+            if error_correction is not None and "error_correction" in r:
+                if r["error_correction"] != error_correction:
+                    continue
+            if encoding is not None:
+                if r.get("encoding", "UTF-8") != encoding:
+                    continue
         return True
     return False
 
