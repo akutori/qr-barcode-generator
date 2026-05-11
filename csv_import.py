@@ -9,9 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-import qrcode
-import qrcode.constants
-from qrcode.exceptions import DataOverflowError
+import segno
 
 from core import has_duplicate
 
@@ -33,12 +31,7 @@ _VALID_TYPES_NORMALIZED = {
 }
 _VALID_EC = {"L", "M", "Q", "H"}
 
-_EC_MAP = {
-    "L": qrcode.constants.ERROR_CORRECT_L,
-    "M": qrcode.constants.ERROR_CORRECT_M,
-    "Q": qrcode.constants.ERROR_CORRECT_Q,
-    "H": qrcode.constants.ERROR_CORRECT_H,
-}
+_EC_MAP = {"L": "l", "M": "m", "Q": "q", "H": "h"}
 
 # ---------------------------------------------------------------------------
 # データ型
@@ -223,13 +216,11 @@ def _check_qr_capacity(text: str, error_correction: str) -> str:
     """QR コードにデータが収まるか確認する（画像生成なし）。
     収まらない場合はエラーメッセージを返す。収まる場合は空文字を返す。
     """
-    ec = _EC_MAP.get(error_correction, qrcode.constants.ERROR_CORRECT_M)
-    qr = qrcode.QRCode(error_correction=ec)
+    ec = _EC_MAP.get(error_correction, "m")
     try:
-        qr.add_data(text)
-        qr.make(fit=True)
+        segno.make(text, encoding="utf-8", eci=True, error=ec)
         return ""
-    except (DataOverflowError, ValueError):
+    except segno.encoder.DataOverflowError:
         byte_len = len(text.encode("utf-8"))
         return (
             f"テキストが長すぎてQRコードに収まりません。"
