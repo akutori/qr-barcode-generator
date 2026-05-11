@@ -259,7 +259,6 @@ class App:
         dlg.geometry("720x500")
         dlg.minsize(600, 400)
         dlg.resizable(True, True)
-        dlg.transient(self.root)
         self._import_dlg = dlg
 
         _rows: list[ImportRow] = []
