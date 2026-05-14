@@ -135,7 +135,7 @@ def show_enlarged(record: dict, root: tk.Tk) -> None:
 
     tk.Label(info, text=f"保存先: {record['path']}",
              font=(_FONT, 8), fg="gray", anchor="w", justify="left").pack(fill="x")
-    tk.Label(info, text=f"[{record['type']}]",
+    tk.Label(info, text=f"[{_TYPE_DISP.get(record['type'], record['type'])}]",
              font=(_FONT, 10, "bold"), anchor="w").pack(fill="x")
 
     # テキスト内容: 4行固定でスクロール可能（読み取り専用）
@@ -744,7 +744,7 @@ class App:
             display = "\n".join(lines[:_MAX_PREVIEW_LINES]) + f"\n … (+{len(lines) - _MAX_PREVIEW_LINES}行)"
         else:
             display = rec["text"]
-        self.detail_label.config(text=f"[{rec['type']}]  {display}\n{rec['path']}")
+        self.detail_label.config(text=f"[{_TYPE_DISP.get(rec['type'], rec['type'])}]  {display}\n{rec['path']}")
 
     def _show_record(self, rec: dict) -> None:
         self.current_path = rec["path"]
