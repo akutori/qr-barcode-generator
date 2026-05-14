@@ -21,6 +21,7 @@ from core import (
     save_metadata,
     save_settings,
     sort_records,
+    type_label,
 )
 from csv_import import (
     ImportRow,
@@ -135,8 +136,12 @@ def show_enlarged(record: dict, root: tk.Tk) -> None:
 
     tk.Label(info, text=f"保存先: {record['path']}",
              font=(_FONT, 8), fg="gray", anchor="w", justify="left").pack(fill="x")
-    tk.Label(info, text=f"[{_TYPE_DISP.get(record['type'], record['type'])}]",
+    tk.Label(info, text=f"[{type_label(record)}]",
              font=(_FONT, 10, "bold"), anchor="w").pack(fill="x")
+    desc = record.get("description", "")
+    if desc:
+        tk.Label(info, text=f"説明: {desc}",
+                 font=(_FONT, 9), fg="gray", anchor="w").pack(fill="x")
 
     # テキスト内容: 4行固定でスクロール可能（読み取り専用）
     txt_f = tk.Frame(info)
@@ -741,10 +746,16 @@ class App:
         lines = rec["text"].split("\n")
         _MAX_PREVIEW_LINES = 3
         if len(lines) > _MAX_PREVIEW_LINES:
-            display = "\n".join(lines[:_MAX_PREVIEW_LINES]) + f"\n … (+{len(lines) - _MAX_PREVIEW_LINES}行)"
+            text_display = "\n".join(lines[:_MAX_PREVIEW_LINES]) + f"\n … (+{len(lines) - _MAX_PREVIEW_LINES}行)"
         else:
-            display = rec["text"]
-        self.detail_label.config(text=f"[{_TYPE_DISP.get(rec['type'], rec['type'])}]  {display}\n{rec['path']}")
+            text_display = rec["text"]
+        tag = f"[{type_label(rec)}]"
+        desc = rec.get("description", "")
+        if desc:
+            label_text = f"{tag}  {desc}\n{text_display}\n{rec['path']}"
+        else:
+            label_text = f"{tag}  {text_display}\n{rec['path']}"
+        self.detail_label.config(text=label_text)
 
     def _show_record(self, rec: dict) -> None:
         self.current_path = rec["path"]

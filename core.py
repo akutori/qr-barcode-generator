@@ -75,7 +75,7 @@ def save_settings(settings: dict, path: Path) -> None:
 _TYPE_DISPLAY = {"Q": "QR", "B": "Barcode"}
 
 
-def _type_label(r: dict) -> str:
+def type_label(r: dict) -> str:
     """レコードの種別ラベルを返す。Q は誤り訂正レベルとエンコードを付加する（例: QR:H:SJIS）。"""
     disp = _TYPE_DISPLAY.get(r["type"], r["type"])
     if r["type"] == "Q":
@@ -85,6 +85,9 @@ def _type_label(r: dict) -> str:
             suffix += ":SJIS"
         return f"{disp}{suffix}"
     return disp
+
+
+_type_label = type_label  # 内部互換エイリアス
 
 
 def has_duplicate(
