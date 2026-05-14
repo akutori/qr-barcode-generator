@@ -46,16 +46,16 @@ class TestGenerateQR:
         generate_qr("日本語テスト", fp)
         assert fp.exists()
 
-    def test_日本語QRはフルQRのバイトモードで生成される(self, tmp_path):
-        """ECI モードや Micro QR はスキャナー非対応端末で文字化けを引き起こす。
-        UTF-8 バイト列を make_qr に直接渡してフル QR バイトモードで生成すること。
+    def test_日本語QRはECIヘッダー付きフルQRで生成される(self, tmp_path):
+        """ECI ヘッダーで UTF-8 を宣言し、フル QR（非 Micro）で生成すること。
+        Micro QR は ECI 非対応のため make_qr() を使ってフル QR を強制する。
         """
         import segno as _segno
-        text = "あ"  # 3 bytes: eci=True だと Micro QR M3(230px) になる
+        text = "あ"
         fp = tmp_path / "jp_full.png"
         generate_qr(text, fp)
         img = Image.open(str(fp))
-        expected_qr = _segno.make_qr(text.encode("utf-8"), error="m")
+        expected_qr = _segno.make_qr(text, encoding="utf-8", eci=True, error="m")
         assert not expected_qr.is_micro
         expected_w = expected_qr.symbol_size(scale=10, border=4)[0]
         assert img.width == expected_w
@@ -153,6 +153,23 @@ class TestGenerateQR:
         text = "🎉"  # 絵文字は cp932 に存在しない
         with pytest.raises(ValueError, match="Shift-JIS"):
             generate_qr(text, tmp_path / "qr.png", encoding="SJIS")
+
+    def test_SJIS非対応文字はファイルを生成しない(self, tmp_path):
+        """エラー時にファイルが残らないこと（悲観的バリデーション）。"""
+        fp = tmp_path / "qr.png"
+        with pytest.raises(ValueError):
+            generate_qr("Hello🎉", fp, encoding="SJIS")
+        assert not fp.exists()
+
+    def test_不正なエンコード指定はValueErrorを送出する(self, tmp_path):
+        """未知のエンコード名は早期に弾く（UTF-8 へのサイレントフォールバック禁止）。"""
+        with pytest.raises(ValueError, match="エンコード"):
+            generate_qr("テスト", tmp_path / "qr.png", encoding="UTF-16")
+
+    def test_空文字列エンコード指定はValueErrorを送出する(self, tmp_path):
+        """空文字列も不正なエンコードとして扱う。"""
+        with pytest.raises(ValueError, match="エンコード"):
+            generate_qr("テスト", tmp_path / "qr.png", encoding="")
 
     def test_オーバーフロー時のエラーメッセージにエンコード名が含まれる(self, tmp_path):
         """SJIS モードでオーバーフローした場合、エラーメッセージにエンコード名が含まれる。"""

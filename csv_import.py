@@ -250,6 +250,9 @@ def validate_row(row: ImportRow, existing_records: list[dict]) -> ImportRow:
     return row
 
 
+_SEGNO_ENC_MAP: dict[str, str] = {"UTF-8": "utf-8", "SJIS": "shift_jis"}
+
+
 def _check_qr_capacity(
     text: str,
     error_correction: str,
@@ -259,17 +262,16 @@ def _check_qr_capacity(
     収まらない場合はエラーメッセージを返す。収まる場合は空文字を返す。
     SJIS で表現できない文字もここで検出する。
     """
-    codec = "cp932" if encoding == "SJIS" else "utf-8"
+    segno_enc = _SEGNO_ENC_MAP.get(encoding, "utf-8")
     ec = _EC_MAP.get(error_correction, "m")
     try:
-        data = text.encode(codec)
+        segno.make_qr(text, encoding=segno_enc, eci=True, error=ec)
+        return ""
     except UnicodeEncodeError:
         return "テキストに Shift-JIS で表現できない文字が含まれています。"
-    try:
-        segno.make_qr(data, error=ec)
-        return ""
     except segno.encoder.DataOverflowError:
-        return f"テキストが長すぎてQRコードに収まりません。（{len(data)} バイト）"
+        byte_len = len(text.encode(segno_enc, errors="replace"))
+        return f"テキストが長すぎてQRコードに収まりません。（{byte_len} バイト）"
 
 
 def validate_all(

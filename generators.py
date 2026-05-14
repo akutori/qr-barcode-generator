@@ -8,6 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 from barcode.writer import ImageWriter
 
 _EC_MAP = {"L": "l", "M": "m", "Q": "q", "H": "h"}
+_VALID_ENCODINGS: dict[str, str] = {"UTF-8": "utf-8", "SJIS": "shift_jis"}
 
 # 誤り訂正レベルごとの最大容量（英数字 / バイナリ）
 _EC_CAPACITY: dict[str, tuple[str, str]] = {
@@ -55,25 +56,32 @@ def generate_qr(
     error_correction: str = "M",
     encoding: str = "UTF-8",
 ) -> None:
-    ec = _EC_MAP.get(error_correction, "m")
-    codec = "cp932" if encoding == "SJIS" else "utf-8"
-    try:
-        data = text.encode(codec)
-    except UnicodeEncodeError:
+    enc_key = encoding.strip().upper() if encoding else ""
+    segno_enc = _VALID_ENCODINGS.get(enc_key)
+    if segno_enc is None:
         raise ValueError(
-            "テキストに Shift-JIS で表現できない文字が含まれています。"
-            "（絵文字や一部の Unicode 文字は Shift-JIS では使用できません）"
+            f"不正なエンコード指定: '{encoding}'\n"
+            f"使用可能な値: {', '.join(_VALID_ENCODINGS)}"
         )
+    if enc_key == "SJIS":
+        try:
+            text.encode("shift_jis")
+        except UnicodeEncodeError:
+            raise ValueError(
+                "テキストに Shift-JIS で表現できない文字が含まれています。"
+                "（絵文字や一部の Unicode 文字は Shift-JIS では使用できません）"
+            )
+    ec = _EC_MAP.get(error_correction, "m")
     try:
-        # eci=True は Micro QR や ECI 非対応スキャナーで文字化けを引き起こすため不使用。
-        # バイト列を make_qr に直接渡してフル QR バイトモードで生成する。
-        qr = segno.make_qr(data, error=ec)
+        # make_qr でフル QR を強制し、ECI ヘッダーで文字コードを宣言する。
+        # make() は Micro QR を選択することがあり、Micro QR は ECI 非対応のため不使用。
+        qr = segno.make_qr(text, encoding=segno_enc, eci=True, error=ec)
     except segno.encoder.DataOverflowError as e:
         alphanum, binary = _EC_CAPACITY.get(error_correction, ("4,296文字", "2,953バイト"))
         raise ValueError(
             f"テキストが長すぎてQRコードに収まりません（エンコード: {encoding}）。\n"
             f"誤り訂正レベル {error_correction}: 英数字 {alphanum} / バイナリ {binary}\n"
-            f"入力サイズ: {len(data)} バイト"
+            f"入力サイズ: {len(text.encode(segno_enc, errors='replace'))} バイト"
         ) from e
     buf = BytesIO()
     qr.save(buf, kind="png", scale=10, border=4)
