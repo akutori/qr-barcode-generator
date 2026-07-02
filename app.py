@@ -13,11 +13,13 @@ from PIL import Image, ImageTk
 
 from core import (
     SORT_OPTION_LABELS,
+    apply_custom_order,
     has_duplicate,
     list_labels,
     list_labels_with_status,
     load_metadata,
     load_settings,
+    move_index,
     save_metadata,
     save_settings,
     sort_records,
@@ -199,6 +201,9 @@ class App:
         self._tooltip_win: tk.Toplevel | None = None
         self._tooltip_after: str | None = None
         self._tooltip_rec_idx: int = -1
+        self._drag_start_lb_idx: int | None = None
+        self._drag_current_lb_idx: int | None = None
+        self._dragging: bool = False
 
         self._build_menu()
         self._build_ui()
@@ -666,6 +671,9 @@ class App:
         self.listbox.bind("<Button-3>", self._on_list_right_click)
         self.listbox.bind("<Motion>", self._on_list_hover)
         self.listbox.bind("<Leave>", lambda _: self._hide_tooltip())
+        self.listbox.bind("<Button-1>", self._on_list_drag_start, add="+")
+        self.listbox.bind("<B1-Motion>", self._on_list_drag_motion)
+        self.listbox.bind("<ButtonRelease-1>", self._on_list_drag_release)
 
         self._context_menu = tk.Menu(self.root, tearoff=0)
         self._context_menu.add_command(
@@ -792,7 +800,55 @@ class App:
 
     # ── イベントハンドラ ──────────────────────────────────────────────────
 
+    def _on_list_drag_start(self, event: tk.Event) -> None:
+        idx = self.listbox.nearest(event.y)
+        if idx < 0 or idx >= len(self._filtered_indices):
+            return
+        if self._search_var.get().strip():
+            return  # 検索中はドラッグ並び替えを無効化
+        self._drag_start_lb_idx = idx
+        self._drag_current_lb_idx = idx
+
+    def _on_list_drag_motion(self, event: tk.Event) -> None:
+        if self._drag_start_lb_idx is None:
+            return
+        self._dragging = True
+        self._hide_tooltip()
+        target = self.listbox.nearest(event.y)
+        if target < 0 or target >= len(self._filtered_indices):
+            return
+        if target == self._drag_current_lb_idx:
+            return
+        self._filtered_indices = move_index(
+            self._filtered_indices, self._drag_current_lb_idx, target
+        )
+        self._drag_current_lb_idx = target
+        self._populate_list()
+        self.listbox.selection_clear(0, tk.END)
+        self.listbox.selection_set(target)
+
+    def _on_list_drag_release(self, _: tk.Event) -> None:
+        if self._drag_start_lb_idx is None:
+            return
+        moved = self._dragging and self._drag_current_lb_idx != self._drag_start_lb_idx
+        self._drag_start_lb_idx = None
+        self._drag_current_lb_idx = None
+        self._dragging = False
+        if not moved:
+            return
+
+        apply_custom_order(self.records, self._filtered_indices)
+        save_metadata(self.records, METADATA_FILE)
+
+        custom_label = SORT_OPTION_LABELS["custom"]
+        if self._sort_var.get() != custom_label:
+            self._sort_var.set(custom_label)  # trace_add 経由で _on_sort_change → _filter_records
+        else:
+            self._filter_records()  # 既にカスタム順選択中は trace が発火しないため手動で再描画
+
     def _on_list_hover(self, event: tk.Event) -> None:
+        if self._dragging:
+            return
         idx = self.listbox.nearest(event.y)
         if idx < 0 or idx >= len(self._filtered_indices):
             self._hide_tooltip()

@@ -9,6 +9,7 @@ from PIL import Image
 
 from core import (
     SORT_OPTION_LABELS,
+    apply_custom_order,
     blank_image,
     calc_preview_size,
     find_index,
@@ -19,6 +20,7 @@ from core import (
     list_labels_with_status,
     load_metadata,
     load_settings,
+    move_index,
     save_metadata,
     save_settings,
     sort_records,
@@ -461,6 +463,94 @@ class TestSortRecords:
             "text_az", "text_za",
             "desc_az", "desc_za",
             "type_qr", "type_bc",
+            "custom",
         ]
         assert SORT_OPTION_LABELS["date_new"] == "追加日 新しい順"
         assert SORT_OPTION_LABELS["type_bc"] == "種別 Barcode先"
+        assert SORT_OPTION_LABELS["custom"] == "カスタム順"
+
+    def test_カスタム順はorderフィールドの昇順(self, sample_records):
+        sample_records[0]["order"] = 2
+        sample_records[1]["order"] = 0
+        sample_records[2]["order"] = 1
+        indices = [0, 1, 2]
+        result = sort_records(sample_records, indices, "custom")
+        assert result == [1, 2, 0]
+
+    def test_カスタム順でorderフィールドのない旧レコードはインデックス値にフォールバックする(self, sample_records):
+        indices = [0, 1, 2]
+        result = sort_records(sample_records, indices, "custom")
+        assert result == [0, 1, 2]
+
+    def test_カスタム順でorderありなしが混在する場合(self, sample_records):
+        sample_records[0]["order"] = 5
+        indices = [0, 1, 2]
+        result = sort_records(sample_records, indices, "custom")
+        assert result == [1, 2, 0]  # order: 1, 2, 5 の昇順（1,2はインデックス値フォールバック）
+
+
+# ---------------------------------------------------------------------------
+# カスタム並び替え（ドラッグ&ドロップ）
+# ---------------------------------------------------------------------------
+
+class TestMoveIndex:
+    def test_先頭要素を末尾へ移動する(self):
+        assert move_index([0, 1, 2, 3], 0, 3) == [1, 2, 3, 0]
+
+    def test_末尾要素を先頭へ移動する(self):
+        assert move_index([0, 1, 2, 3], 3, 0) == [3, 0, 1, 2]
+
+    def test_中間要素を別の中間位置へ移動する(self):
+        assert move_index([0, 1, 2, 3, 4], 1, 3) == [0, 2, 3, 1, 4]
+
+    def test_同じ位置への移動は変化しない(self):
+        assert move_index([0, 1, 2], 1, 1) == [0, 1, 2]
+
+    def test_元のリストを変更しない(self):
+        original = [0, 1, 2, 3]
+        move_index(original, 0, 2)
+        assert original == [0, 1, 2, 3]
+
+    def test_空リストは空リストを返す(self):
+        assert move_index([], 0, 0) == []
+
+    def test_from_posが範囲外なら現状維持で返す(self):
+        assert move_index([0, 1, 2], 5, 0) == [0, 1, 2]
+
+    def test_to_posが範囲を超える場合は末尾にクランプされる(self):
+        assert move_index([0, 1, 2], 0, 99) == [1, 2, 0]
+
+    def test_単一要素のリストは変化しない(self):
+        assert move_index([0], 0, 0) == [0]
+
+
+class TestApplyCustomOrder:
+    def test_ordered_indicesの順にorderフィールドが0から振られる(self):
+        records = [{"text": "a"}, {"text": "b"}, {"text": "c"}]
+        apply_custom_order(records, [2, 0, 1])
+        assert records[2]["order"] == 0
+        assert records[0]["order"] == 1
+        assert records[1]["order"] == 2
+
+    def test_records自体は破壊的に変更される(self):
+        records = [{"text": "a"}, {"text": "b"}]
+        apply_custom_order(records, [1, 0])
+        assert "order" in records[0]
+        assert "order" in records[1]
+
+    def test_ordered_indicesに含まれないレコードのorderは変更しない(self):
+        records = [{"text": "a", "order": 99}, {"text": "b"}]
+        apply_custom_order(records, [1])
+        assert records[0]["order"] == 99
+        assert records[1]["order"] == 0
+
+    def test_空リストは何もしない(self):
+        records = [{"text": "a"}]
+        apply_custom_order(records, [])
+        assert "order" not in records[0]
+
+    def test_既存のorder値を上書きする(self):
+        records = [{"text": "a", "order": 5}, {"text": "b", "order": 3}]
+        apply_custom_order(records, [0, 1])
+        assert records[0]["order"] == 0
+        assert records[1]["order"] == 1

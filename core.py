@@ -56,6 +56,7 @@ SORT_OPTION_LABELS: dict[str, str] = {
     "desc_za":   "説明 Z→A",
     "type_qr":   "種別 QR先",
     "type_bc":   "種別 Barcode先",
+    "custom":    "カスタム順",
 }
 
 
@@ -167,6 +168,9 @@ def sort_records(records: list[dict], indices: list[int], sort_key: str) -> list
     if not indices:
         return []
 
+    if sort_key == "custom":
+        return sorted(indices, key=lambda i: records[i].get("order", i))
+
     if sort_key == "date_old":
         return list(indices)
 
@@ -207,3 +211,30 @@ def sort_records(records: list[dict], indices: list[int], sort_key: str) -> list
 
     # デフォルト: "date_new"
     return list(reversed(indices))
+
+
+def move_index(indices: list[int], from_pos: int, to_pos: int) -> list[int]:
+    """indices 内の要素を from_pos から to_pos の位置へ移動した新しいリストを返す。
+
+    元の indices は変更しない。from_pos が範囲外なら現状維持で返す。
+    to_pos は 0..len(indices)-1 にクランプする。
+    """
+    if from_pos == to_pos:
+        return list(indices)
+    if not (0 <= from_pos < len(indices)):
+        return list(indices)
+
+    result = list(indices)
+    item = result.pop(from_pos)
+    to_pos = max(0, min(to_pos, len(result)))
+    result.insert(to_pos, item)
+    return result
+
+
+def apply_custom_order(records: list[dict], ordered_indices: list[int]) -> None:
+    """ordered_indices の並び順通りに records[i]["order"] を 0 から振り直す（破壊的更新）。
+
+    ordered_indices に含まれない records の order は変更しない。
+    """
+    for pos, idx in enumerate(ordered_indices):
+        records[idx]["order"] = pos
