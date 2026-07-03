@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 
@@ -95,6 +96,24 @@ def has_duplicate(
 def _display_text(r: dict) -> str:
     """一覧に表示するテキストを返す。説明があれば説明、なければ先頭行。"""
     return r.get("description") or r["text"].split("\n")[0]
+
+
+_FILENAME_INVALID_CHARS = re.compile(r'[\\/:*?"<>|]')
+_MAX_FILENAME_LEN = 50
+
+
+def suggested_filename(r: dict) -> str:
+    """「名前を付けて保存」ダイアログのデフォルトファイル名を返す。
+
+    _display_text と同じ内容（説明があれば説明、なければテキスト先頭行）を使い、
+    Windows のファイル名に使えない文字は _ に置換する。拡張子は r["path"] のものを維持する。
+    """
+    base = _FILENAME_INVALID_CHARS.sub("_", _display_text(r)).strip()
+    base = base[:_MAX_FILENAME_LEN].strip()
+    if not base:
+        base = "image"
+    ext = Path(r["path"]).suffix or ".png"
+    return base + ext
 
 
 def _item_label(r: dict) -> str:

@@ -19,6 +19,7 @@ from core import (
     save_metadata,
     save_settings,
     sort_records,
+    suggested_filename,
 )
 
 
@@ -510,3 +511,45 @@ class TestApplyCustomOrder:
         apply_custom_order(records, [0, 1])
         assert records[0]["order"] == 0
         assert records[1]["order"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 保存ダイアログ用ファイル名
+# ---------------------------------------------------------------------------
+
+class TestSuggestedFilename:
+    def test_descriptionがあればdescriptionを使う(self):
+        r = {"text": "https://example.com", "path": "qr_1.png", "description": "商品A"}
+        assert suggested_filename(r) == "商品A.png"
+
+    def test_descriptionがなければtext先頭行を使う(self):
+        r = {"text": "hello\nworld", "path": "qr_1.png"}
+        assert suggested_filename(r) == "hello.png"
+
+    def test_拡張子は元のpathから引き継ぐ(self):
+        r = {"text": "hello", "path": "bar_1.jpg"}
+        assert suggested_filename(r) == "hello.jpg"
+
+    def test_拡張子がない元pathはpngにフォールバックする(self):
+        r = {"text": "hello", "path": "no_extension"}
+        assert suggested_filename(r) == "hello.png"
+
+    def test_ファイル名に使えない文字はアンダースコアに置換される(self):
+        r = {"text": "https://example.com/path?x=1", "path": "qr_1.png"}
+        result = suggested_filename(r)
+        assert result == "https___example.com_path_x=1.png"
+
+    def test_置換後も不正文字が残らない(self):
+        r = {"text": 'a\\b/c:d*e?f"g<h>i|j', "path": "qr_1.png"}
+        result = suggested_filename(r)
+        for ch in '\\/:*?"<>|':
+            assert ch not in result[:-4]  # 拡張子を除いた本体部分
+
+    def test_空文字列はimageにフォールバックする(self):
+        r = {"text": "", "path": "qr_1.png", "description": ""}
+        assert suggested_filename(r) == "image.png"
+
+    def test_長すぎる場合は切り詰められる(self):
+        r = {"text": "a" * 100, "path": "qr_1.png"}
+        result = suggested_filename(r)
+        assert len(result) <= 50 + len(".png")

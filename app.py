@@ -23,6 +23,7 @@ from core import (
     save_metadata,
     save_settings,
     sort_records,
+    suggested_filename,
     type_label,
 )
 from csv_import import (
@@ -686,6 +687,9 @@ class App:
         self._context_menu.add_command(
             label="画像をコピー", command=self._copy_selected_image
         )
+        self._context_menu.add_command(
+            label="画像を保存...", command=self._save_selected_image
+        )
 
         ttk.Separator(self.root, orient="vertical").pack(side="left", fill="y")
 
@@ -932,6 +936,8 @@ class App:
         rec = self.records[self._rec_idx(idx)]
         state = tk.NORMAL if _description_for_copy(rec) else tk.DISABLED
         self._context_menu.entryconfig("説明をコピー", state=state)
+        img_state = tk.NORMAL if (SAVE_DIR / rec["path"]).exists() else tk.DISABLED
+        self._context_menu.entryconfig("画像を保存...", state=img_state)
         self._context_menu.tk_popup(event.x_root, event.y_root)
 
     def _on_desc_label_enter(self, event: tk.Event) -> None:
@@ -997,7 +1003,7 @@ class App:
         sel = self.listbox.curselection()
         if not sel or sel[0] >= len(self._filtered_indices):
             return
-        path = self.records[self._rec_idx(sel[0])]["path"]
+        path = SAVE_DIR / self.records[self._rec_idx(sel[0])]["path"]
         try:
             subprocess.run(
                 ["powershell", "-command",
@@ -1007,6 +1013,29 @@ class App:
             )
         except Exception as e:
             messagebox.showerror("エラー", f"画像のコピーに失敗しました:\n{e}", parent=self.root)
+
+    def _save_selected_image(self) -> None:
+        sel = self.listbox.curselection()
+        if not sel or sel[0] >= len(self._filtered_indices):
+            return
+        rec = self.records[self._rec_idx(sel[0])]
+        src = SAVE_DIR / rec["path"]
+        if not src.exists():
+            messagebox.showerror("エラー", "画像ファイルが見つかりません。", parent=self.root)
+            return
+        dest = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="画像を保存",
+            initialfile=suggested_filename(rec),
+            defaultextension=src.suffix,
+            filetypes=[("PNG画像", "*.png"), ("すべてのファイル", "*.*")],
+        )
+        if not dest:
+            return
+        try:
+            shutil.copy2(src, dest)
+        except Exception as e:
+            messagebox.showerror("エラー", f"画像の保存に失敗しました:\n{e}", parent=self.root)
 
     def _ask_duplicate(self, text: str, code_type: str, error_correction: str | None = None) -> bool:
         """重複確認ダイアログを表示し、生成を続けるか返す。「これ以降は表示しない」で警告を無効化できる。"""
