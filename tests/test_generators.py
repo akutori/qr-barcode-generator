@@ -226,56 +226,58 @@ def _png_record(tmp_path: Path, text: str, filename: str = "test.png") -> dict:
     img_path = tmp_path / filename
     if not img_path.exists():
         Image.new("RGB", (200, 200), "white").save(str(img_path))
-    return {"text": text, "type": "Q", "path": str(img_path)}
+    return {"text": text, "type": "Q", "path": filename}
 
 
 class TestGeneratePdfGrid:
+    """path はファイル名のみを保持し、save_dir と結合して画像を読み込む（フォルダ移動耐性のため）。"""
+
     def test_ファイルが生成される(self, tmp_path):
         records = [_png_record(tmp_path, "hello")]
         output = tmp_path / "out.pdf"
-        generate_pdf_grid(records, output)
+        generate_pdf_grid(records, output, tmp_path)
         assert output.exists()
 
     def test_空リストのときファイルを生成しない(self, tmp_path):
         output = tmp_path / "out.pdf"
-        generate_pdf_grid([], output)
+        generate_pdf_grid([], output, tmp_path)
         assert not output.exists()
 
     def test_有効なPDFである(self, tmp_path):
         records = [_png_record(tmp_path, "hello")]
         output = tmp_path / "out.pdf"
-        generate_pdf_grid(records, output)
+        generate_pdf_grid(records, output, tmp_path)
         assert output.read_bytes()[:4] == b"%PDF"
 
     def test_存在しない画像パスでもエラーにならない(self, tmp_path):
-        records = [{"text": "hello", "type": "Q", "path": str(tmp_path / "missing.png")}]
+        records = [{"text": "hello", "type": "Q", "path": "missing.png"}]
         output = tmp_path / "out.pdf"
-        generate_pdf_grid(records, output)
+        generate_pdf_grid(records, output, tmp_path)
         assert output.exists()
 
     def test_12件超でファイルサイズが増加する(self, tmp_path):
         # cols=3, rows=4 → per_page=12 なので 13 件目で 2 ページ目に突入する
         img_path = tmp_path / "test.png"
         Image.new("RGB", (200, 200), "white").save(str(img_path))
-        rec = {"text": "item", "type": "Q", "path": str(img_path)}
+        rec = {"text": "item", "type": "Q", "path": "test.png"}
 
         out_1 = tmp_path / "one_page.pdf"
         out_2 = tmp_path / "two_page.pdf"
-        generate_pdf_grid([rec] * 1, out_1)
-        generate_pdf_grid([rec] * 13, out_2)
+        generate_pdf_grid([rec] * 1, out_1, tmp_path)
+        generate_pdf_grid([rec] * 13, out_2, tmp_path)
         assert out_2.stat().st_size > out_1.stat().st_size
 
     def test_25文字を超えるテキストでもエラーにならない(self, tmp_path):
         records = [_png_record(tmp_path, "a" * 50)]
         output = tmp_path / "out.pdf"
-        generate_pdf_grid(records, output)
+        generate_pdf_grid(records, output, tmp_path)
         assert output.exists()
 
     def test_改行を含むテキストでもPDFが生成される(self, tmp_path):
         """vCard 等の複数行テキストを持つレコードでも正常に出力できること"""
         records = [_png_record(tmp_path, "BEGIN:VCARD\nFN:山田\nEND:VCARD")]
         output = tmp_path / "out.pdf"
-        generate_pdf_grid(records, output)
+        generate_pdf_grid(records, output, tmp_path)
         assert output.exists()
 
     def test_descriptionフィールドがあってもエラーにならない(self, tmp_path):
@@ -283,24 +285,34 @@ class TestGeneratePdfGrid:
         rec = _png_record(tmp_path, "https://example.com")
         rec["description"] = "商品A"
         output = tmp_path / "out.pdf"
-        generate_pdf_grid([rec], output)
+        generate_pdf_grid([rec], output, tmp_path)
         assert output.exists()
 
     def test_descriptionなしのレコードはテキスト先頭行をラベルとして使う(self, tmp_path):
         """description がない旧データでも PDF 生成が壊れないこと（後方互換）"""
         records = [_png_record(tmp_path, "fallback_text")]
         output = tmp_path / "out.pdf"
-        generate_pdf_grid(records, output)
+        generate_pdf_grid(records, output, tmp_path)
         assert output.exists()
 
     def test_1列指定でファイルが生成される(self, tmp_path):
         records = [_png_record(tmp_path, "hello")]
         output = tmp_path / "out.pdf"
-        generate_pdf_grid(records, output, cols=1)
+        generate_pdf_grid(records, output, tmp_path, cols=1)
         assert output.exists()
 
     def test_6列指定でファイルが生成される(self, tmp_path):
         records = [_png_record(tmp_path, "hello")]
         output = tmp_path / "out.pdf"
-        generate_pdf_grid(records, output, cols=6)
+        generate_pdf_grid(records, output, tmp_path, cols=6)
+        assert output.exists()
+
+    def test_異なるsave_dirに差し替えても正しく画像を解決できる(self, tmp_path):
+        """フォルダを移動しても save_dir を差し替えるだけで正しく解決できることの確認。"""
+        moved_dir = tmp_path / "moved"
+        moved_dir.mkdir()
+        Image.new("RGB", (200, 200), "white").save(str(moved_dir / "test.png"))
+        records = [{"text": "hello", "type": "Q", "path": "test.png"}]
+        output = tmp_path / "out.pdf"
+        generate_pdf_grid(records, output, moved_dir)
         assert output.exists()

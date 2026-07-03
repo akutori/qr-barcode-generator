@@ -1,21 +1,16 @@
-"""core.py のユニットテスト: ストレージ / 画像ユーティリティ / ラベル (t_wada 式 TDD)"""
+"""core.py のユニットテスト: ストレージ / ラベル (t_wada 式 TDD)"""
 
-import io
 import json
 from pathlib import Path
 
 import pytest
-from PIL import Image
 
 from core import (
     SORT_OPTION_LABELS,
     apply_custom_order,
-    blank_image,
     calc_preview_size,
     find_index,
-    fit_image,
     has_duplicate,
-    img_to_bytes,
     list_labels,
     list_labels_with_status,
     load_metadata,
@@ -145,112 +140,73 @@ class TestHasDuplicate:
 
 
 # ---------------------------------------------------------------------------
-# 画像ユーティリティ
-# ---------------------------------------------------------------------------
-
-class TestBlankImage:
-    def test_指定サイズのPNG画像を返す(self):
-        data = blank_image(100, 200)
-        img = Image.open(io.BytesIO(data))
-        assert img.size == (100, 200)
-        assert img.format == "PNG"
-
-
-class TestFitImage:
-    def test_出力は常に指定サイズになる(self, tmp_path):
-        src = tmp_path / "src.png"
-        Image.new("RGB", (400, 300), "red").save(str(src))
-
-        data = fit_image(str(src), 200, 200)
-
-        img = Image.open(io.BytesIO(data))
-        assert img.size == (200, 200)
-
-    def test_横長画像は上下に白パディングが付く(self, tmp_path):
-        src = tmp_path / "src.png"
-        Image.new("RGB", (400, 100), "blue").save(str(src))  # 4:1 比率
-
-        data = fit_image(str(src), 200, 200)
-
-        img = Image.open(io.BytesIO(data))
-        assert img.getpixel((100, 0)) == (255, 255, 255)   # 上端 = 白
-        assert img.getpixel((100, 100)) == (0, 0, 255)     # 中央 = 青
-
-    def test_縦長画像は左右に白パディングが付く(self, tmp_path):
-        src = tmp_path / "src.png"
-        Image.new("RGB", (100, 400), "red").save(str(src))  # 1:4 比率
-
-        data = fit_image(str(src), 200, 200)
-
-        img = Image.open(io.BytesIO(data))
-        assert img.getpixel((0, 100)) == (255, 255, 255)   # 左端 = 白
-        assert img.getpixel((100, 100)) == (255, 0, 0)     # 中央 = 赤
-
-
-# ---------------------------------------------------------------------------
 # ラベルユーティリティ
 # ---------------------------------------------------------------------------
 
 class TestListLabelsWithStatus:
+    """path はファイル名のみを保持し、save_dir と結合して存在確認する（フォルダ移動耐性のため）。"""
+
     def test_ファイルが存在するレコードはそのまま返す(self, tmp_path):
-        img = tmp_path / "qr.png"
-        img.write_bytes(b"dummy")
-        records = [{"text": "hello", "type": "Q", "path": str(img)}]
-        assert list_labels_with_status(records) == ["[QR]  hello"]
+        (tmp_path / "qr.png").write_bytes(b"dummy")
+        records = [{"text": "hello", "type": "Q", "path": "qr.png"}]
+        assert list_labels_with_status(records, tmp_path) == ["[QR]  hello"]
 
     def test_ファイルが存在しないレコードには警告記号を付ける(self, tmp_path):
-        records = [{"text": "hello", "type": "Q", "path": str(tmp_path / "missing.png")}]
-        assert list_labels_with_status(records) == ["⚠[QR]  hello"]
+        records = [{"text": "hello", "type": "Q", "path": "missing.png"}]
+        assert list_labels_with_status(records, tmp_path) == ["⚠[QR]  hello"]
 
     def test_存在するものと欠損が混在する場合に正しく区別する(self, tmp_path):
-        existing = tmp_path / "ok.png"
-        existing.write_bytes(b"dummy")
+        (tmp_path / "ok.png").write_bytes(b"dummy")
         records = [
-            {"text": "ok", "type": "Q", "path": str(existing)},
-            {"text": "missing", "type": "B", "path": str(tmp_path / "gone.png")},
+            {"text": "ok", "type": "Q", "path": "ok.png"},
+            {"text": "missing", "type": "B", "path": "gone.png"},
         ]
-        result = list_labels_with_status(records)
+        result = list_labels_with_status(records, tmp_path)
         assert result[0] == "[QR]  ok"
         assert result[1] == "⚠[Barcode]  missing"
 
-    def test_空リストは空リストを返す(self):
-        assert list_labels_with_status([]) == []
+    def test_空リストは空リストを返す(self, tmp_path):
+        assert list_labels_with_status([], tmp_path) == []
 
     def test_QRに誤り訂正レベルが含まれる場合は角括弧内に表示される(self, tmp_path):
-        img = tmp_path / "qr.png"
-        img.write_bytes(b"dummy")
-        records = [{"text": "hello", "type": "Q", "path": str(img), "error_correction": "L"}]
-        assert list_labels_with_status(records) == ["[QR:L]  hello"]
+        (tmp_path / "qr.png").write_bytes(b"dummy")
+        records = [{"text": "hello", "type": "Q", "path": "qr.png", "error_correction": "L"}]
+        assert list_labels_with_status(records, tmp_path) == ["[QR:L]  hello"]
 
     def test_欠損レコードでもQRの誤り訂正レベルが表示される(self, tmp_path):
         records = [{"text": "hello", "type": "Q",
-                    "path": str(tmp_path / "missing.png"), "error_correction": "H"}]
-        assert list_labels_with_status(records) == ["⚠[QR:H]  hello"]
+                    "path": "missing.png", "error_correction": "H"}]
+        assert list_labels_with_status(records, tmp_path) == ["⚠[QR:H]  hello"]
 
     def test_descriptionがある場合はえんぴつプレフィックスと説明文で表示される(self, tmp_path):
-        img = tmp_path / "qr.png"
-        img.write_bytes(b"dummy")
+        (tmp_path / "qr.png").write_bytes(b"dummy")
         records = [{"text": "https://example.com", "type": "Q",
-                    "path": str(img), "description": "商品A"}]
-        assert list_labels_with_status(records) == ["✎[QR]  商品A"]
+                    "path": "qr.png", "description": "商品A"}]
+        assert list_labels_with_status(records, tmp_path) == ["✎[QR]  商品A"]
 
     def test_descriptionがある場合にファイル欠損なら両方のプレフィックスが付く(self, tmp_path):
         records = [{"text": "hello", "type": "Q",
-                    "path": str(tmp_path / "missing.png"), "description": "説明"}]
-        assert list_labels_with_status(records) == ["⚠✎[QR]  説明"]
+                    "path": "missing.png", "description": "説明"}]
+        assert list_labels_with_status(records, tmp_path) == ["⚠✎[QR]  説明"]
 
     def test_descriptionが空文字列ならプレフィックスなしでテキスト先頭行を表示(self, tmp_path):
-        img = tmp_path / "qr.png"
-        img.write_bytes(b"dummy")
+        (tmp_path / "qr.png").write_bytes(b"dummy")
         records = [{"text": "hello", "type": "Q",
-                    "path": str(img), "description": ""}]
-        assert list_labels_with_status(records) == ["[QR]  hello"]
+                    "path": "qr.png", "description": ""}]
+        assert list_labels_with_status(records, tmp_path) == ["[QR]  hello"]
+
+    def test_異なるsave_dirに同じファイル名があっても正しく解決される(self, tmp_path):
+        """フォルダを移動しても save_dir を差し替えるだけで正しく解決できることの確認。"""
+        moved_dir = tmp_path / "moved"
+        moved_dir.mkdir()
+        (moved_dir / "qr.png").write_bytes(b"dummy")
+        records = [{"text": "hello", "type": "Q", "path": "qr.png"}]
+        assert list_labels_with_status(records, moved_dir) == ["[QR]  hello"]
 
     def test_改行付きテキストは先頭行のみ表示される(self, tmp_path):
-        img = tmp_path / "qr.png"
-        img.write_bytes(b"dummy")
-        records = [{"text": "line1\nline2\nline3", "type": "Q", "path": str(img)}]
-        assert list_labels_with_status(records) == ["[QR]  line1"]
+        (tmp_path / "qr.png").write_bytes(b"dummy")
+        records = [{"text": "line1\nline2\nline3", "type": "Q", "path": "qr.png"}]
+        assert list_labels_with_status(records, tmp_path) == ["[QR]  line1"]
 
 
 class TestListLabels:

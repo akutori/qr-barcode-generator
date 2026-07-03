@@ -111,7 +111,7 @@ def _truncate_label(text: str) -> str:
     return text[:_MAX_LABEL_LEN] + "…" if len(text) > _MAX_LABEL_LEN else text
 
 
-def generate_pdf_grid(records: list[dict], output_path: Path, cols: int = 3) -> None:
+def generate_pdf_grid(records: list[dict], output_path: Path, save_dir: Path, cols: int = 3) -> None:
     PAGE_W, PAGE_H = 1240, 1754  # A4 @ 150 DPI
     MARGIN = 60
     GAP = 30
@@ -138,7 +138,7 @@ def generate_pdf_grid(records: list[dict], output_path: Path, cols: int = 3) -> 
             y = MARGIN + row * (CELL_H + GAP)
 
             try:
-                img = Image.open(rec["path"]).convert("RGB")
+                img = Image.open(Path(save_dir) / rec["path"]).convert("RGB")
                 img.thumbnail((cell_w, CELL_IMG_H), Image.LANCZOS)
                 ix = x + (cell_w - img.width) // 2
                 iy = y + (CELL_IMG_H - img.height) // 2

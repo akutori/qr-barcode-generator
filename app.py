@@ -113,9 +113,10 @@ def _description_for_copy(rec: dict) -> str | None:
 # 拡大表示ウィンドウ
 # ---------------------------------------------------------------------------
 
-def show_enlarged(record: dict, root: tk.Tk) -> None:
+def show_enlarged(record: dict, root: tk.Tk, save_dir: Path) -> None:
+    resolved_path = save_dir / record["path"]
     try:
-        orig_img = Image.open(record["path"]).convert("RGB")
+        orig_img = Image.open(resolved_path).convert("RGB")
     except Exception as e:
         messagebox.showerror("エラー", f"画像を読み込めません:\n{e}", parent=root)
         return
@@ -136,7 +137,7 @@ def show_enlarged(record: dict, root: tk.Tk) -> None:
     info = tk.Frame(top)
     info.pack(side="bottom", fill="x", padx=6, pady=(0, 2))
 
-    tk.Label(info, text=f"保存先: {record['path']}",
+    tk.Label(info, text=f"保存先: {resolved_path}",
              font=(_FONT, 8), fg="gray", anchor="w", justify="left").pack(fill="x")
     tk.Label(info, text=f"[{type_label(record)}]",
              font=(_FONT, 10, "bold"), anchor="w").pack(fill="x")
@@ -441,12 +442,12 @@ class App:
                                     encoding=row.encoding)
                         rec: dict = {
                             "text": row.text, "type": row.code_type,
-                            "path": str(fp), "error_correction": row.error_correction,
+                            "path": fp.name, "error_correction": row.error_correction,
                             "encoding": row.encoding,
                         }
                     else:
                         fp = generate_barcode_file(row.text, SAVE_DIR / f"bar_{ts}")
-                        rec = {"text": row.text, "type": row.code_type, "path": str(fp)}
+                        rec = {"text": row.text, "type": row.code_type, "path": fp.name}
                     if row.description:
                         rec["description"] = row.description
                     self.records.append(rec)
@@ -745,7 +746,7 @@ class App:
 
     def _populate_list(self) -> None:
         self.listbox.delete(0, tk.END)
-        labels = list_labels_with_status(self.records)
+        labels = list_labels_with_status(self.records, SAVE_DIR)
         for i in self._filtered_indices:
             self.listbox.insert(tk.END, labels[i])
 
@@ -766,7 +767,7 @@ class App:
         self.detail_label.config(text=label_text)
 
     def _show_record(self, rec: dict) -> None:
-        self.current_path = rec["path"]
+        self.current_path = str(SAVE_DIR / rec["path"])
         self._current_rec_idx = next(
             (i for i, r in enumerate(self.records) if r is rec), None
         )
@@ -920,7 +921,7 @@ class App:
         sel = self.listbox.curselection()
         if not sel or sel[0] >= len(self._filtered_indices):
             return
-        show_enlarged(self.records[self._rec_idx(sel[0])], self.root)
+        show_enlarged(self.records[self._rec_idx(sel[0])], self.root, SAVE_DIR)
 
     def _on_list_right_click(self, event: tk.Event) -> None:
         idx = self.listbox.nearest(event.y)
@@ -1074,12 +1075,12 @@ class App:
                 fp = SAVE_DIR / f"qr_{ts}.png"
                 generate_qr(text, fp, error_correction=self._ec_var.get(),
                             encoding=self._enc_var.get())
-                rec = {"text": text, "type": code_type, "path": str(fp),
+                rec = {"text": text, "type": code_type, "path": fp.name,
                        "error_correction": self._ec_var.get(),
                        "encoding": self._enc_var.get()}
             else:
                 fp = generate_barcode_file(text, SAVE_DIR / f"bar_{ts}")
-                rec = {"text": text, "type": code_type, "path": str(fp)}
+                rec = {"text": text, "type": code_type, "path": fp.name}
             self.records.append(rec)
             save_metadata(self.records, METADATA_FILE)
 
@@ -1113,7 +1114,7 @@ class App:
         if messagebox.askyesno("確認", msg, parent=self.root):
             for i in sorted(rec_indices, reverse=True):
                 try:
-                    Path(self.records[i]["path"]).unlink(missing_ok=True)
+                    (SAVE_DIR / self.records[i]["path"]).unlink(missing_ok=True)
                 except Exception:
                     pass
                 self.records.pop(i)
@@ -1144,7 +1145,7 @@ class App:
         if not path:
             return
         try:
-            generate_pdf_grid(selected, Path(path), cols=self._pdf_cols_var.get())
+            generate_pdf_grid(selected, Path(path), SAVE_DIR, cols=self._pdf_cols_var.get())
             if self.settings.get("auto_open_pdf"):
                 if sys.platform == "win32":
                     os.startfile(path)

@@ -1,8 +1,5 @@
-import io
 import json
 from pathlib import Path
-
-from PIL import Image
 
 
 def load_metadata(path: Path) -> list[dict]:
@@ -15,25 +12,6 @@ def load_metadata(path: Path) -> list[dict]:
 def save_metadata(records: list[dict], path: Path) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(records, f, ensure_ascii=False, indent=2)
-
-
-def img_to_bytes(img: Image.Image) -> bytes:
-    bio = io.BytesIO()
-    img.save(bio, format="PNG")
-    return bio.getvalue()
-
-
-def blank_image(w: int, h: int) -> bytes:
-    return img_to_bytes(Image.new("RGB", (w, h), color=(230, 230, 230)))
-
-
-def fit_image(path: str, w: int, h: int) -> bytes:
-    """画像を (w, h) の白背景に中央配置してリサイズする"""
-    img = Image.open(path).convert("RGB")
-    img.thumbnail((w, h), Image.LANCZOS)
-    bg = Image.new("RGB", (w, h), (255, 255, 255))
-    bg.paste(img, ((w - img.width) // 2, (h - img.height) // 2))
-    return img_to_bytes(bg)
 
 
 _DEFAULT_SETTINGS: dict = {
@@ -88,9 +66,6 @@ def type_label(r: dict) -> str:
     return disp
 
 
-_type_label = type_label  # 内部互換エイリアス
-
-
 def has_duplicate(
     text: str,
     code_type: str,
@@ -127,18 +102,21 @@ def _item_label(r: dict) -> str:
     説明が設定されている場合は ✎ プレフィックスを付ける。
     """
     prefix = "✎" if r.get("description") else ""
-    return f"{prefix}[{_type_label(r)}]  {_display_text(r)}"
+    return f"{prefix}[{type_label(r)}]  {_display_text(r)}"
 
 
 def list_labels(records: list[dict]) -> list[str]:
     return [_item_label(r) for r in records]
 
 
-def list_labels_with_status(records: list[dict]) -> list[str]:
-    """ファイルが欠損しているレコードには先頭に ⚠ を付ける。"""
+def list_labels_with_status(records: list[dict], save_dir: Path) -> list[str]:
+    """ファイルが欠損しているレコードには先頭に ⚠ を付ける。
+
+    r["path"] はファイル名のみを保持するため、save_dir と結合して存在確認する。
+    """
     labels = []
     for r in records:
-        file_prefix = "" if Path(r["path"]).exists() else "⚠"
+        file_prefix = "" if (Path(save_dir) / r["path"]).exists() else "⚠"
         labels.append(f"{file_prefix}{_item_label(r)}")
     return labels
 
