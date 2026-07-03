@@ -9,6 +9,7 @@ from core import (
     SORT_OPTION_LABELS,
     apply_custom_order,
     calc_preview_size,
+    clamp_panel_width,
     find_index,
     has_duplicate,
     list_labels,
@@ -553,3 +554,31 @@ class TestSuggestedFilename:
         r = {"text": "a" * 100, "path": "qr_1.png"}
         result = suggested_filename(r)
         assert len(result) <= 50 + len(".png")
+
+
+# ---------------------------------------------------------------------------
+# パネル幅のクランプ（settings.json の破損・手動編集への防御）
+# ---------------------------------------------------------------------------
+
+class TestClampPanelWidth:
+    def test_範囲内の値はそのまま返す(self):
+        assert clamp_panel_width(300) == 300
+
+    def test_最小値未満は最小値にクランプされる(self):
+        assert clamp_panel_width(50) == 220
+
+    def test_最大値超過は最大値にクランプされる(self):
+        assert clamp_panel_width(9999) == 600
+
+    def test_負の値は最小値にクランプされる(self):
+        assert clamp_panel_width(-100) == 220
+
+    def test_最小値ちょうどはそのまま返す(self):
+        assert clamp_panel_width(220) == 220
+
+    def test_最大値ちょうどはそのまま返す(self):
+        assert clamp_panel_width(600) == 600
+
+    def test_min_wとmax_wを指定できる(self):
+        assert clamp_panel_width(100, min_w=150, max_w=200) == 150
+        assert clamp_panel_width(250, min_w=150, max_w=200) == 200

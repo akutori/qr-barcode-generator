@@ -14,6 +14,7 @@ from PIL import Image, ImageTk
 from core import (
     SORT_OPTION_LABELS,
     apply_custom_order,
+    clamp_panel_width,
     has_duplicate,
     list_labels,
     list_labels_with_status,
@@ -238,6 +239,8 @@ class App:
             variable=self._auto_open_var,
             command=self._on_auto_open_toggle,
         )
+        opt_menu.add_separator()
+        opt_menu.add_command(label="パネル幅をリセット", command=self._reset_panel_width)
         menubar.add_cascade(label="オプション", menu=opt_menu)
 
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -507,6 +510,25 @@ class App:
         except tk.TclError:
             pass
 
+    def _reset_panel_width(self) -> None:
+        """左パネル幅を既定値に戻す（サッシュのダブルクリック・オプションメニューの両方から呼ばれる）"""
+        self._paned.sash_place(0, LEFT_W, 0)
+        self.settings["left_panel_w"] = LEFT_W
+        save_settings(self.settings, SETTINGS_FILE)
+
+    def _on_paned_double_click(self, event: tk.Event) -> None:
+        ident = self._paned.identify(event.x, event.y)
+        if ident and ident[1] in ("sash", "handle"):
+            self._reset_panel_width()
+
+    def _on_paned_sash_release(self, _: tk.Event) -> None:
+        try:
+            x, _y = self._paned.sash_coord(0)
+        except tk.TclError:
+            return
+        self.settings["left_panel_w"] = clamp_panel_width(x)
+        save_settings(self.settings, SETTINGS_FILE)
+
     def _load_metadata_safe(self) -> list[dict]:
         try:
             return load_metadata(METADATA_FILE)
@@ -537,9 +559,18 @@ class App:
 
     def _build_ui(self) -> None:
         ttk.Style().configure("Treeview", rowheight=24)
-        lf = tk.Frame(self.root, width=LEFT_W)
-        lf.pack(side="left", fill="y", padx=(8, 4), pady=8)
-        lf.pack_propagate(False)
+
+        self._paned = tk.PanedWindow(
+            self.root, orient=tk.HORIZONTAL, sashwidth=6, sashrelief="raised",
+            bg="#d9d9d9",
+        )
+        self._paned.pack(expand=True, fill="both", padx=4, pady=4)
+        self._paned.bind("<Double-Button-1>", self._on_paned_double_click)
+        self._paned.bind("<ButtonRelease-1>", self._on_paned_sash_release)
+
+        lf = tk.Frame(self._paned)
+        initial_w = clamp_panel_width(self.settings.get("left_panel_w", LEFT_W))
+        self._paned.add(lf, width=initial_w, minsize=220)
 
         tk.Label(lf, text="テキスト入力:", font=(_FONT, 11, "bold"),
                  anchor="w").pack(fill="x")
@@ -691,10 +722,8 @@ class App:
             label="画像を保存...", command=self._save_selected_image
         )
 
-        ttk.Separator(self.root, orient="vertical").pack(side="left", fill="y")
-
-        rf = tk.Frame(self.root)
-        rf.pack(side="right", expand=True, fill="both", padx=(4, 8), pady=8)
+        rf = tk.Frame(self._paned)
+        self._paned.add(rf, minsize=300)
 
         tk.Label(rf, text="プレビュー", font=(_FONT, 11, "bold"),
                  anchor="w").pack(fill="x")

@@ -22,7 +22,13 @@ _DEFAULT_SETTINGS: dict = {
     "qr_encoding": "UTF-8",
     "pdf_cols": 3,
     "sort_order": "date_new",
+    "left_panel_w": 310,
 }
+
+
+def clamp_panel_width(w: int, min_w: int = 220, max_w: int = 600) -> int:
+    """左パネル幅を妥当な範囲にクランプする（settings.json の手動編集・破損への防御）。"""
+    return max(min_w, min(w, max_w))
 
 SORT_OPTION_LABELS: dict[str, str] = {
     "date_new":  "追加日 新しい順",
