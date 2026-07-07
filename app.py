@@ -55,9 +55,12 @@ def _read_version() -> str:
 _VERSION = _read_version()
 
 _FONT = "Meiryo"
-LEFT_W = 310        # 左パネル固定幅 (px)
+LEFT_W = 310        # 左パネル既定幅 (px)。ドラッグでリサイズ可能
 WIN_MIN_W = 560
 WIN_MIN_H = 420
+
+_DRAG_SCROLL_MARGIN = 20     # この px 数以内にカーソルがあると自動スクロール
+_DRAG_SCROLL_INTERVAL_MS = 80
 
 
 def _app_dir() -> Path:
@@ -207,6 +210,8 @@ class App:
         self._drag_start_lb_idx: int | None = None
         self._drag_current_lb_idx: int | None = None
         self._dragging: bool = False
+        self._drag_scroll_after_id: str | None = None
+        self._drag_last_y: int = 0
 
         self._build_menu()
         self._build_ui()
@@ -848,7 +853,17 @@ class App:
             return
         self._dragging = True
         self._hide_tooltip()
-        target = self.listbox.nearest(event.y)
+        self._drag_last_y = event.y
+        self._update_drag_autoscroll(event.y)
+        self._apply_drag_target(event.y)
+
+    def _apply_drag_target(self, y: int) -> None:
+        """カーソル位置 y に応じてドラッグ中のアイテムを並べ替え、一覧を再描画する。
+
+        スクロール位置を維持したまま再描画する（_populate_list は delete→insert のため
+        何もしないとスクロールが先頭に戻ってしまう）。
+        """
+        target = self.listbox.nearest(y)
         if target < 0 or target >= len(self._filtered_indices):
             return
         if target == self._drag_current_lb_idx:
@@ -857,11 +872,41 @@ class App:
             self._filtered_indices, self._drag_current_lb_idx, target
         )
         self._drag_current_lb_idx = target
+        view = self.listbox.yview()
         self._populate_list()
+        self.listbox.yview_moveto(view[0])
         self.listbox.selection_clear(0, tk.END)
         self.listbox.selection_set(target)
 
+    def _update_drag_autoscroll(self, y: int) -> None:
+        """カーソルが一覧の上端・下端付近にあれば自動スクロールを開始し、離れたら止める。"""
+        height = self.listbox.winfo_height()
+        if y < _DRAG_SCROLL_MARGIN:
+            direction = -1
+        elif y > height - _DRAG_SCROLL_MARGIN:
+            direction = 1
+        else:
+            direction = 0
+
+        if direction == 0:
+            self._cancel_drag_autoscroll()
+        elif self._drag_scroll_after_id is None:
+            self._run_drag_autoscroll(direction)
+
+    def _run_drag_autoscroll(self, direction: int) -> None:
+        self.listbox.yview_scroll(direction, "units")
+        self._apply_drag_target(self._drag_last_y)
+        self._drag_scroll_after_id = self.root.after(
+            _DRAG_SCROLL_INTERVAL_MS, lambda: self._run_drag_autoscroll(direction)
+        )
+
+    def _cancel_drag_autoscroll(self) -> None:
+        if self._drag_scroll_after_id is not None:
+            self.root.after_cancel(self._drag_scroll_after_id)
+            self._drag_scroll_after_id = None
+
     def _on_list_drag_release(self, _: tk.Event) -> None:
+        self._cancel_drag_autoscroll()
         if self._drag_start_lb_idx is None:
             return
         moved = self._dragging and self._drag_current_lb_idx != self._drag_start_lb_idx
@@ -874,11 +919,13 @@ class App:
         apply_custom_order(self.records, self._filtered_indices)
         save_metadata(self.records, METADATA_FILE)
 
+        view = self.listbox.yview()  # _filter_records の再描画でスクロールが先頭に戻るため保存
         custom_label = SORT_OPTION_LABELS["custom"]
         if self._sort_var.get() != custom_label:
             self._sort_var.set(custom_label)  # trace_add 経由で _on_sort_change → _filter_records
         else:
             self._filter_records()  # 既にカスタム順選択中は trace が発火しないため手動で再描画
+        self.listbox.yview_moveto(view[0])
 
     def _on_list_hover(self, event: tk.Event) -> None:
         if self._dragging:
@@ -996,7 +1043,9 @@ class App:
         if rec.get("description", "") != new_desc:
             rec["description"] = new_desc
             save_metadata(self.records, METADATA_FILE)
+            view = self.listbox.yview()
             self._populate_list()
+            self.listbox.yview_moveto(view[0])
 
     def _reset_description(self) -> None:
         if self._current_rec_idx is None:
@@ -1006,7 +1055,9 @@ class App:
         if rec.get("description", "") != "":
             rec["description"] = ""
             save_metadata(self.records, METADATA_FILE)
+            view = self.listbox.yview()
             self._populate_list()
+            self.listbox.yview_moveto(view[0])
 
     def _copy_selected_text(self) -> None:
         sel = self.listbox.curselection()
@@ -1177,7 +1228,9 @@ class App:
                     pass
                 self.records.pop(i)
             save_metadata(self.records, METADATA_FILE)
+            view = self.listbox.yview()
             self._filter_records()
+            self.listbox.yview_moveto(view[0])
             self.preview_label.config(image="")
             self._photo = None
             self.detail_label.config(text="")
