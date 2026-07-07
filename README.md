@@ -1,5 +1,10 @@
 # QR & バーコード 生成ツール
 
+<div align="center">
+  <img src="assets\icon.ico" width="128" height="128" alt="アプリアイコン">
+</div>
+
+
 テキストを入力して QR コードまたはバーコード (Code128) を生成・保存する Windows 向け GUI アプリケーションです。
 
 ## スクリーンショット
