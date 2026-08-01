@@ -2,6 +2,8 @@ import sys
 import tkinter as tk
 from pathlib import Path
 
+from PIL import Image, ImageTk
+
 from app import App
 
 
@@ -30,12 +32,29 @@ def _set_windows_app_id() -> None:
         pass
 
 
+def _set_window_icon(root: tk.Tk, icon_path: Path) -> None:
+    """ウィンドウ・タスクバーのアイコンを設定する。
+
+    root.iconbitmap() は Tk 内蔵の古い .ico パーサに依存しており、256px 等で使われる
+    PNG 圧縮フレームを含むモダンな .ico を解析できず無言で失敗することがある
+    （別PCでタスクバーが tkinter の既定アイコンになる不具合の原因）。
+    Pillow でデコードした画像を iconphoto() で設定することでこれを回避する。
+    第一引数 True で、以降生成する Toplevel（拡大表示・ダイアログ等）にも適用される。
+    """
+    try:
+        photo = ImageTk.PhotoImage(Image.open(icon_path))
+        root.iconphoto(True, photo)
+        root._icon_photo_ref = photo  # PhotoImage の GC 防止
+    except Exception:
+        pass
+
+
 def main() -> None:
     _set_windows_app_id()
     root = tk.Tk()
     icon = _bundled("assets/icon.ico")
     if icon.exists():
-        root.iconbitmap(str(icon))
+        _set_window_icon(root, icon)
     App(root)
     root.mainloop()
 
