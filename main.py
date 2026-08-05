@@ -39,12 +39,24 @@ def _set_window_icon(root: tk.Tk, icon_path: Path) -> None:
     PNG 圧縮フレームを含むモダンな .ico を解析できず無言で失敗することがある
     （別PCでタスクバーが tkinter の既定アイコンになる不具合の原因）。
     Pillow でデコードした画像を iconphoto() で設定することでこれを回避する。
-    第一引数 True で、以降生成する Toplevel（拡大表示・ダイアログ等）にも適用される。
+
+    .ico に含まれる全サイズを個別に読み込んで渡す。256px 等 1 サイズだけを渡すと、
+    タスクバーの小さい枠に対して正しく縮小されず、画像が欠けたように表示される。
+    Windows では iconphoto の第一引数を True にすると小さいアイコンが無視され
+    大きいアイコンだけがタスクバーにも使われてしまう既知の問題があるため False を指定する
+    （代わりに拡大表示・ダイアログ等の Toplevel は個別にアイコンを継承しない）。
     """
     try:
-        photo = ImageTk.PhotoImage(Image.open(icon_path))
-        root.iconphoto(True, photo)
-        root._icon_photo_ref = photo  # PhotoImage の GC 防止
+        base = Image.open(icon_path)
+        sizes = sorted(base.info.get("sizes") or [base.size])
+        photos = []
+        for size in sizes:
+            frame = Image.open(icon_path)
+            frame.size = size
+            frame.load()
+            photos.append(ImageTk.PhotoImage(frame))
+        root.iconphoto(False, *photos)
+        root._icon_photo_refs = photos  # PhotoImage の GC 防止
     except Exception:
         pass
 
