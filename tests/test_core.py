@@ -1,26 +1,44 @@
 """core.py のユニットテスト: ストレージ / ラベル (t_wada 式 TDD)"""
 
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
 
+import core
 from core import (
     SORT_OPTION_LABELS,
+    FolderExistsError,
+    MoveCollisionError,
     apply_custom_order,
+    build_record_path,
     calc_preview_size,
     clamp_panel_width,
+    create_folder,
+    find_duplicate_indices,
     find_index,
+    find_move_collisions,
+    group_by_folder,
     has_duplicate,
+    list_folders,
     list_labels,
     list_labels_with_status,
     load_metadata,
     load_settings,
     move_index,
+    move_records,
+    record_folder,
+    resolve_folder_dir,
+    safe_record_path,
+    same_folder_name,
+    sanitize_open_folders,
     save_metadata,
     save_settings,
     sort_records,
     suggested_filename,
+    validate_folder_name,
 )
 
 
@@ -582,3 +600,769 @@ class TestClampPanelWidth:
     def test_min_wとmax_wを指定できる(self):
         assert clamp_panel_width(100, min_w=150, max_w=200) == 150
         assert clamp_panel_width(250, min_w=150, max_w=200) == 200
+
+
+# ---------------------------------------------------------------------------
+# 階層名の検証
+# ---------------------------------------------------------------------------
+
+class TestValidateFolderName:
+    def test_通常の名前はそのまま返す(self):
+        assert validate_folder_name("商品A") == "商品A"
+
+    def test_前後の空白は除去して返す(self):
+        assert validate_folder_name("  abc  ") == "abc"
+
+    def test_途中の空白とアポストロフィは許可する(self):
+        assert validate_folder_name("Tom's items") == "Tom's items"
+
+    @pytest.mark.parametrize("name", ["", "   "])
+    def test_空文字と空白のみはエラー(self, name):
+        with pytest.raises(ValueError):
+            validate_folder_name(name)
+
+    @pytest.mark.parametrize("ch", list('\\/:*?"<>|'))
+    def test_Windowsで使えない文字はエラー(self, ch):
+        with pytest.raises(ValueError):
+            validate_folder_name(f"a{ch}b")
+
+    @pytest.mark.parametrize("name", [".", "..", "...", "abc."])
+    def test_ドットのみまたは末尾ドットはエラー(self, name):
+        with pytest.raises(ValueError):
+            validate_folder_name(name)
+
+    @pytest.mark.parametrize("name", ["CON", "nul", "Com1", "LPT9", "con.txt", "AUX", "COM¹", "lpt²"])
+    def test_Windows予約デバイス名はエラー(self, name):
+        with pytest.raises(ValueError):
+            validate_folder_name(name)
+
+    @pytest.mark.parametrize("name", ["metadata.json", "SETTINGS.JSON", "metadata.json.bak"])
+    def test_アプリの管理ファイルと同名はエラー(self, name):
+        with pytest.raises(ValueError):
+            validate_folder_name(name)
+
+    @pytest.mark.parametrize("name", ["a\x00b", "a\nb", "a\tb"])
+    def test_制御文字を含む名前はエラー(self, name):
+        with pytest.raises(ValueError):
+            validate_folder_name(name)
+
+    def test_50文字は許可し51文字はエラー(self):
+        assert validate_folder_name("あ" * 50) == "あ" * 50
+        with pytest.raises(ValueError):
+            validate_folder_name("あ" * 51)
+
+
+class TestSameFolderName:
+    def test_大文字小文字の違いは同名として扱う(self):
+        assert same_folder_name("Foo", "foo") is True
+
+    def test_異なる名前はFalse(self):
+        assert same_folder_name("foo", "bar") is False
+
+
+# ---------------------------------------------------------------------------
+# レコードの階層・パス
+# ---------------------------------------------------------------------------
+
+class TestRecordFolder:
+    def test_ファイル名のみはルート(self):
+        assert record_folder({"path": "qr.png"}) == ""
+
+    def test_階層付きパスは階層名を返す(self):
+        assert record_folder({"path": "商品/qr.png"}) == "商品"
+
+    def test_バックスラッシュ区切りも階層として扱う(self):
+        assert record_folder({"path": "商品\\qr.png"}) == "商品"
+
+    def test_2階層を超えるパスはルート扱い(self):
+        assert record_folder({"path": "a/b/qr.png"}) == ""
+
+    def test_pathキーがないときはルート(self):
+        assert record_folder({}) == ""
+
+    @pytest.mark.parametrize("path", ["../x.png", "CON/x.png", "a./x.png", "C:/x.png"])
+    def test_階層名として不正なものはルート扱い(self, path):
+        assert record_folder({"path": path}) == ""
+
+
+class TestBuildRecordPath:
+    def test_ルートはファイル名のみ(self):
+        assert build_record_path("", "qr.png") == "qr.png"
+
+    def test_階層はスラッシュ区切りで連結する(self):
+        assert build_record_path("商品", "qr.png") == "商品/qr.png"
+
+
+class TestSafeRecordPath:
+    def test_ファイル名のみはsave_dir直下に解決する(self, tmp_path):
+        assert safe_record_path(tmp_path, "qr.png") == tmp_path / "qr.png"
+
+    def test_階層付きパスはsave_dir配下に解決する(self, tmp_path):
+        assert safe_record_path(tmp_path, "商品/qr.png") == tmp_path / "商品" / "qr.png"
+
+    def test_バックスラッシュ区切りも解決できる(self, tmp_path):
+        assert safe_record_path(tmp_path, "商品\\qr.png") == tmp_path / "商品" / "qr.png"
+
+    @pytest.mark.parametrize("rel", [
+        "../x.png", "a/../x.png", "..\\x.png", "a/../../x.png", "..",
+    ])
+    def test_親ディレクトリ参照はエラー(self, tmp_path, rel):
+        with pytest.raises(ValueError):
+            safe_record_path(tmp_path, rel)
+
+    @pytest.mark.parametrize("rel", [
+        "/etc/passwd", "C:\\x.png", "C:x.png", "\\\\server\\share\\x.png", "\\x.png",
+    ])
+    def test_絶対パスとドライブ指定はエラー(self, tmp_path, rel):
+        with pytest.raises(ValueError):
+            safe_record_path(tmp_path, rel)
+
+    def test_2階層を超えるパスはエラー(self, tmp_path):
+        with pytest.raises(ValueError):
+            safe_record_path(tmp_path, "a/b/qr.png")
+
+    @pytest.mark.parametrize("rel", ["", "a//x.png", "a/", "a/x\x00.png"])
+    def test_空や不正な区切りはエラー(self, tmp_path, rel):
+        with pytest.raises(ValueError):
+            safe_record_path(tmp_path, rel)
+
+    def test_文字列以外はエラー(self, tmp_path):
+        with pytest.raises(ValueError):
+            safe_record_path(tmp_path, None)
+
+    def test_ファイル名に代替データストリーム指定を含むとエラー(self, tmp_path):
+        with pytest.raises(ValueError):
+            safe_record_path(tmp_path, "qr.png:stream")
+
+    def test_階層名が予約名のときはエラー(self, tmp_path):
+        with pytest.raises(ValueError):
+            safe_record_path(tmp_path, "con/qr.png")
+
+    @pytest.mark.parametrize("rel", [
+        "metadata.json", "SETTINGS.JSON", "metadata.json.bak", "settings.json.tmp", "a/metadata.json",
+    ])
+    def test_アプリの管理ファイルを指すpathはエラー(self, tmp_path, rel):
+        """手編集された metadata.json でも、削除・移動の対象に設定ファイルやメタデータ自身を含めない。"""
+        with pytest.raises(ValueError):
+            safe_record_path(tmp_path, rel)
+
+    @pytest.mark.parametrize("rel", ["NUL.png", "a/com1.png", "qr.png.", "qr.png "])
+    def test_ファイル名が予約デバイス名または末尾ドット空白のときはエラー(self, tmp_path, rel):
+        with pytest.raises(ValueError):
+            safe_record_path(tmp_path, rel)
+
+    def test_階層の実体確認の結果を呼び出し間で使い回せる(self, tmp_path):
+        checked: dict[str, bool] = {}
+        safe_record_path(tmp_path, "Foo/a.png", checked)
+        assert checked == {"foo": True}
+        safe_record_path(tmp_path, "qr.png", checked)
+        assert checked == {"foo": True}
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="シンボリックリンク作成権限が必要")
+    def test_save_dir外を指す階層の確認結果も使い回してエラーにする(self, tmp_path):
+        save_dir = tmp_path / "generated"
+        save_dir.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (save_dir / "link").symlink_to(outside, target_is_directory=True)
+        checked: dict[str, bool] = {}
+        for _ in range(2):
+            with pytest.raises(ValueError):
+                safe_record_path(save_dir, "link/qr.png", checked)
+        assert checked == {"link": False}
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="シンボリックリンク作成権限が必要")
+    def test_save_dir外を指す階層はエラー(self, tmp_path):
+        save_dir = tmp_path / "generated"
+        save_dir.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (save_dir / "link").symlink_to(outside, target_is_directory=True)
+        with pytest.raises(ValueError):
+            safe_record_path(save_dir, "link/qr.png")
+
+
+class TestResolveFolderDir:
+    def test_空文字はsave_dir自身(self, tmp_path):
+        assert resolve_folder_dir(tmp_path, "") == tmp_path
+
+    def test_階層名はsave_dir配下のディレクトリになる(self, tmp_path):
+        assert resolve_folder_dir(tmp_path, "商品") == tmp_path / "商品"
+
+    @pytest.mark.parametrize("name", ["..", "a/b", "CON", " a "])
+    def test_不正な階層名はエラー(self, tmp_path, name):
+        with pytest.raises(ValueError):
+            resolve_folder_dir(tmp_path, name)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="シンボリックリンク作成権限が必要")
+    def test_save_dir外を指す階層はエラー(self, tmp_path):
+        save_dir = tmp_path / "generated"
+        save_dir.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (save_dir / "link").symlink_to(outside, target_is_directory=True)
+        with pytest.raises(ValueError):
+            resolve_folder_dir(save_dir, "link")
+
+
+# ---------------------------------------------------------------------------
+# 階層の一覧・グルーピング
+# ---------------------------------------------------------------------------
+
+class TestListFolders:
+    def test_サブディレクトリがなければ空(self, tmp_path):
+        assert list_folders(tmp_path, []) == []
+
+    def test_存在しないsave_dirは空(self, tmp_path):
+        assert list_folders(tmp_path / "none", []) == []
+
+    def test_ディレクトリのみを名前順に返しファイルは無視する(self, tmp_path):
+        (tmp_path / "b").mkdir()
+        (tmp_path / "A").mkdir()
+        (tmp_path / "metadata.json").write_text("[]")
+        assert list_folders(tmp_path, []) == ["A", "b"]
+
+    def test_レコードが参照する階層はディレクトリがなくても含める(self, tmp_path):
+        records = [{"text": "x", "type": "Q", "path": "gone/qr.png"}]
+        assert list_folders(tmp_path, records) == ["gone"]
+
+    def test_大文字小文字違いは同一視しディスク上の名前を優先する(self, tmp_path):
+        (tmp_path / "Foo").mkdir()
+        records = [{"text": "x", "type": "Q", "path": "foo/qr.png"}]
+        assert list_folders(tmp_path, records) == ["Foo"]
+
+    def test_不正な名前のディレクトリは除外する(self, tmp_path):
+        (tmp_path / "CON").mkdir()
+        (tmp_path / "bad.").mkdir()
+        (tmp_path / "ok").mkdir()
+        assert list_folders(tmp_path, []) == ["ok"]
+
+
+class TestGroupByFolder:
+    def test_ルートと階層に振り分ける(self):
+        records = [
+            {"text": "a", "type": "Q", "path": "a.png"},
+            {"text": "b", "type": "Q", "path": "F/b.png"},
+            {"text": "c", "type": "Q", "path": "F/c.png"},
+        ]
+        assert group_by_folder(records, [0, 1, 2], ["F"]) == {"": [0], "F": [1, 2]}
+
+    def test_空の階層もキーに含める(self):
+        assert group_by_folder([], [], ["F"]) == {"": [], "F": []}
+
+    def test_indicesの順序を保つ(self):
+        records = [{"text": str(i), "type": "Q", "path": "F/x.png"} for i in range(3)]
+        assert group_by_folder(records, [2, 0, 1], ["F"])["F"] == [2, 0, 1]
+
+    def test_大文字小文字違いは正規名にまとめる(self):
+        records = [{"text": "a", "type": "Q", "path": "f/a.png"}]
+        assert group_by_folder(records, [0], ["F"]) == {"": [], "F": [0]}
+
+    def test_未知の階層を指すレコードはルート扱い(self):
+        records = [{"text": "a", "type": "Q", "path": "unknown/a.png"}]
+        assert group_by_folder(records, [0], []) == {"": [0]}
+
+
+# ---------------------------------------------------------------------------
+# 重複・衝突の検出
+# ---------------------------------------------------------------------------
+
+class TestFindDuplicateIndices:
+    def test_一致するレコードの位置を返す(self):
+        records = [
+            {"text": "hello", "type": "Q", "path": "a.png", "error_correction": "M"},
+            {"text": "other", "type": "Q", "path": "b.png", "error_correction": "M"},
+            {"text": "hello", "type": "Q", "path": "c.png", "error_correction": "M"},
+        ]
+        assert find_duplicate_indices("hello", "Q", records, "M", "UTF-8") == [0, 2]
+
+    def test_一致なしは空リスト(self):
+        assert find_duplicate_indices("hello", "Q", []) == []
+
+
+class TestFindMoveCollisions:
+    @staticmethod
+    def _rec(text, path, code_type="Q", **extra):
+        rec = {"text": text, "type": code_type, "path": path}
+        if code_type == "Q":
+            rec.setdefault("error_correction", "M")
+        rec.update(extra)
+        return rec
+
+    def test_移動先に同一コードがあれば移動元と移動先の位置を返す(self):
+        records = [self._rec("hello", "a.png"), self._rec("hello", "F/b.png")]
+        assert find_move_collisions(records, [0], "F") == [(0, 1)]
+
+    def test_別の階層にある同一コードは衝突しない(self):
+        records = [self._rec("hello", "a.png"), self._rec("hello", "G/b.png")]
+        assert find_move_collisions(records, [0], "F") == []
+
+    def test_ルートへの移動でルートの同一コードと衝突する(self):
+        records = [self._rec("hello", "F/a.png"), self._rec("hello", "b.png")]
+        assert find_move_collisions(records, [0], "") == [(0, 1)]
+
+    def test_移動対象同士は衝突として扱わない(self):
+        records = [self._rec("hello", "a.png"), self._rec("hello", "b.png")]
+        assert find_move_collisions(records, [0, 1], "F") == []
+
+    def test_すでに移動先にあるレコードは対象外(self):
+        records = [self._rec("hello", "F/a.png"), self._rec("hello", "F/b.png")]
+        assert find_move_collisions(records, [0], "F") == []
+
+    def test_移動対象に移動先の既存レコードが混ざっていてもそれは衝突相手になる(self):
+        """移動先にいるレコードは動かないため、選択に含まれていても移動元からは除外し衝突相手に残す。"""
+        records = [self._rec("hello", "a.png"), self._rec("hello", "F/b.png")]
+        assert find_move_collisions(records, [0, 1], "F") == [(0, 1)]
+
+    def test_QRで誤り訂正レベルが異なれば衝突しない(self):
+        records = [self._rec("hello", "a.png"),
+                   self._rec("hello", "F/b.png", error_correction="H")]
+        assert find_move_collisions(records, [0], "F") == []
+
+    def test_QRでエンコードが異なれば衝突しない(self):
+        records = [self._rec("日本語", "a.png", encoding="UTF-8"),
+                   self._rec("日本語", "F/b.png", encoding="SJIS")]
+        assert find_move_collisions(records, [0], "F") == []
+
+    def test_種別が異なれば衝突しない(self):
+        records = [self._rec("12345", "a.png", "Q"), self._rec("12345", "F/b.png", "B")]
+        assert find_move_collisions(records, [0], "F") == []
+
+    def test_バーコードは同一テキストで衝突する(self):
+        records = [self._rec("12345", "a.png", "B"), self._rec("12345", "F/b.png", "B")]
+        assert find_move_collisions(records, [0], "F") == [(0, 1)]
+
+    def test_階層名の大文字小文字は同一視する(self):
+        records = [self._rec("hello", "a.png"), self._rec("hello", "f/b.png")]
+        assert find_move_collisions(records, [0], "F") == [(0, 1)]
+
+
+# ---------------------------------------------------------------------------
+# 階層への移動
+# ---------------------------------------------------------------------------
+
+def _make_rec(save_dir: Path, folder: str, filename: str, text: str,
+              code_type: str = "Q", content: bytes = b"png", **extra) -> dict:
+    """実ファイル付きのレコードを作る。folder が空文字ならルート。"""
+    target = save_dir / folder if folder else save_dir
+    target.mkdir(parents=True, exist_ok=True)
+    (target / filename).write_bytes(content)
+    rec = {"text": text, "type": code_type, "path": build_record_path(folder, filename)}
+    if code_type == "Q":
+        rec["error_correction"] = "M"
+    rec.update(extra)
+    return rec
+
+
+@pytest.fixture
+def save_dir(tmp_path):
+    d = tmp_path / "generated"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture
+def meta(save_dir):
+    return save_dir / "metadata.json"
+
+
+class TestMoveRecords:
+    def test_ルートから階層へファイルとpathが移動する(self, save_dir, meta):
+        records = [_make_rec(save_dir, "", "qr1.png", "hello")]
+        result = move_records(records, [0], "a", save_dir, meta)
+        assert result.moved == 1
+        assert (save_dir / "a" / "qr1.png").exists()
+        assert not (save_dir / "qr1.png").exists()
+        assert records[0]["path"] == "a/qr1.png"
+        assert load_metadata(meta)[0]["path"] == "a/qr1.png"
+
+    def test_階層からルートへ移動できる(self, save_dir, meta):
+        records = [_make_rec(save_dir, "a", "qr1.png", "hello")]
+        move_records(records, [0], "", save_dir, meta)
+        assert (save_dir / "qr1.png").exists()
+        assert records[0]["path"] == "qr1.png"
+
+    def test_階層から別の階層へ移動できる(self, save_dir, meta):
+        records = [_make_rec(save_dir, "a", "qr1.png", "hello")]
+        move_records(records, [0], "b", save_dir, meta)
+        assert (save_dir / "b" / "qr1.png").exists()
+        assert not (save_dir / "a" / "qr1.png").exists()
+        assert records[0]["path"] == "b/qr1.png"
+
+    def test_複数件をまとめて移動できる(self, save_dir, meta):
+        records = [
+            _make_rec(save_dir, "", "qr1.png", "one"),
+            _make_rec(save_dir, "", "qr2.png", "two"),
+            _make_rec(save_dir, "", "qr3.png", "three"),
+        ]
+        result = move_records(records, [0, 2], "a", save_dir, meta)
+        assert result.moved == 2
+        assert [r["path"] for r in records] == ["a/qr1.png", "qr2.png", "a/qr3.png"]
+
+    def test_すでに移動先にあるレコードは移動しない(self, save_dir, meta):
+        records = [_make_rec(save_dir, "a", "qr1.png", "hello")]
+        result = move_records(records, [0], "a", save_dir, meta)
+        assert result.moved == 0
+        assert records[0]["path"] == "a/qr1.png"
+        assert (save_dir / "a" / "qr1.png").exists()
+
+    def test_移動先に存在しない階層は作成する(self, save_dir, meta):
+        records = [_make_rec(save_dir, "", "qr1.png", "hello")]
+        move_records(records, [0], "new", save_dir, meta)
+        assert (save_dir / "new").is_dir()
+
+    @pytest.mark.parametrize("dest", ["..", "a/b", "a\\b", "CON", "x:y"])
+    def test_不正な階層名はエラーで何も変更しない(self, save_dir, meta, dest):
+        records = [_make_rec(save_dir, "", "qr1.png", "hello")]
+        with pytest.raises(ValueError):
+            move_records(records, [0], dest, save_dir, meta)
+        assert records[0]["path"] == "qr1.png"
+        assert (save_dir / "qr1.png").exists()
+
+    def test_衝突があり上書き未指定ならエラーで何も変更しない(self, save_dir, meta):
+        records = [
+            _make_rec(save_dir, "", "qr1.png", "hello"),
+            _make_rec(save_dir, "a", "qr2.png", "hello"),
+        ]
+        with pytest.raises(MoveCollisionError) as exc:
+            move_records(records, [0], "a", save_dir, meta)
+        assert exc.value.collisions == [(0, 1)]
+        assert len(records) == 2
+        assert [r["path"] for r in records] == ["qr1.png", "a/qr2.png"]
+        assert (save_dir / "qr1.png").exists()
+        assert (save_dir / "a" / "qr2.png").exists()
+
+    def test_上書き指定で移動先の既存レコードとファイルを削除する(self, save_dir, meta):
+        records = [
+            _make_rec(save_dir, "", "qr1.png", "hello"),
+            _make_rec(save_dir, "a", "qr2.png", "hello"),
+        ]
+        result = move_records(records, [0], "a", save_dir, meta, overwrite=True)
+        assert (result.moved, result.overwritten) == (1, 1)
+        assert len(records) == 1
+        assert records[0]["path"] == "a/qr1.png"
+        assert (save_dir / "a" / "qr1.png").exists()
+        assert not (save_dir / "a" / "qr2.png").exists()
+        assert [r["path"] for r in load_metadata(meta)] == ["a/qr1.png"]
+
+    def test_上書き対象のpathが不正でもsave_dir外のファイルは削除しない(self, save_dir, meta, tmp_path):
+        victim = tmp_path / "victim.png"
+        victim.write_bytes(b"keep")
+        records = [
+            _make_rec(save_dir, "a", "qr1.png", "hello"),
+            {"text": "hello", "type": "Q", "path": "../victim.png", "error_correction": "M"},
+        ]
+        result = move_records(records, [0], "", save_dir, meta, overwrite=True)
+        assert result.overwritten == 1
+        assert victim.exists()
+
+    def test_移動先の欠損レコードと同名でも別名にして同じpathを指さない(self, save_dir, meta):
+        """後で欠損側のレコードを削除したとき、移動したファイルまで消えないようにする。"""
+        records = [
+            _make_rec(save_dir, "", "a.png", "one", content=b"MINE"),
+            {"text": "two", "type": "Q", "path": "F/a.png", "error_correction": "M"},
+        ]
+        (save_dir / "F").mkdir()
+        move_records(records, [0], "F", save_dir, meta)
+        assert records[0]["path"] != records[1]["path"]
+        assert (save_dir / records[0]["path"]).read_bytes() == b"MINE"
+
+    def test_移動元ファイルが欠損していてもpathだけ更新する(self, save_dir, meta):
+        records = [{"text": "hello", "type": "Q", "path": "gone.png"}]
+        result = move_records(records, [0], "a", save_dir, meta)
+        assert result.moved == 1
+        assert records[0]["path"] == "a/gone.png"
+
+    def test_移動先に同名の別ファイルがあるときは別名にして上書きしない(self, save_dir, meta):
+        records = [_make_rec(save_dir, "", "qr1.png", "hello", content=b"mine")]
+        (save_dir / "a").mkdir()
+        (save_dir / "a" / "qr1.png").write_bytes(b"unrelated")
+        move_records(records, [0], "a", save_dir, meta)
+        assert (save_dir / "a" / "qr1.png").read_bytes() == b"unrelated"
+        assert records[0]["path"] != "a/qr1.png"
+        assert (save_dir / records[0]["path"]).read_bytes() == b"mine"
+
+    def test_同名ファイルを複数件まとめて移動しても互いに上書きしない(self, save_dir, meta):
+        records = [
+            _make_rec(save_dir, "", "qr1.png", "one", content=b"one"),
+            _make_rec(save_dir, "b", "qr1.png", "two", content=b"two"),
+        ]
+        move_records(records, [0, 1], "a", save_dir, meta)
+        assert records[0]["path"] != records[1]["path"]
+        assert (save_dir / records[0]["path"]).read_bytes() == b"one"
+        assert (save_dir / records[1]["path"]).read_bytes() == b"two"
+
+    def test_ファイル移動が途中で失敗したら移動済みファイルを元に戻す(self, save_dir, meta, monkeypatch):
+        records = [
+            _make_rec(save_dir, "", "qr1.png", "one"),
+            _make_rec(save_dir, "", "qr2.png", "two"),
+            _make_rec(save_dir, "", "qr3.png", "three"),
+        ]
+        real_rename = os.rename
+        calls = []
+
+        def flaky_rename(src, dst):
+            calls.append(src)
+            if len(calls) == 3:
+                raise PermissionError("locked")
+            return real_rename(src, dst)
+
+        monkeypatch.setattr(os, "rename", flaky_rename)
+        with pytest.raises(PermissionError):
+            move_records(records, [0, 1, 2], "a", save_dir, meta)
+        monkeypatch.undo()
+        assert [r["path"] for r in records] == ["qr1.png", "qr2.png", "qr3.png"]
+        for name in ("qr1.png", "qr2.png", "qr3.png"):
+            assert (save_dir / name).exists()
+            assert not (save_dir / "a" / name).exists()
+
+    def test_メタデータ保存に失敗したらファイルとpathを元に戻し上書き対象も残す(
+        self, save_dir, meta, monkeypatch
+    ):
+        records = [
+            _make_rec(save_dir, "", "qr1.png", "hello"),
+            _make_rec(save_dir, "a", "qr2.png", "hello"),
+        ]
+
+        def failing_save(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(core, "save_metadata", failing_save)
+        with pytest.raises(OSError):
+            move_records(records, [0], "a", save_dir, meta, overwrite=True)
+        assert len(records) == 2
+        assert [r["path"] for r in records] == ["qr1.png", "a/qr2.png"]
+        assert (save_dir / "qr1.png").exists()
+        assert (save_dir / "a" / "qr2.png").exists()
+
+    def test_pathが不正なレコードを含むときはエラーで何も移動しない(self, save_dir, meta):
+        records = [
+            _make_rec(save_dir, "", "qr1.png", "one"),
+            {"text": "evil", "type": "Q", "path": "../evil.png"},
+        ]
+        with pytest.raises(ValueError):
+            move_records(records, [0, 1], "a", save_dir, meta)
+        assert records[0]["path"] == "qr1.png"
+        assert (save_dir / "qr1.png").exists()
+
+    def test_範囲外のindexはエラー(self, save_dir, meta):
+        records = [_make_rec(save_dir, "", "qr1.png", "one")]
+        with pytest.raises(ValueError):
+            move_records(records, [5], "a", save_dir, meta)
+
+    def test_移動したレコードは移動先の末尾順になる(self, save_dir, meta):
+        records = [
+            _make_rec(save_dir, "a", "qr1.png", "one", order=0),
+            _make_rec(save_dir, "a", "qr2.png", "two", order=1),
+            _make_rec(save_dir, "", "qr3.png", "three", order=7),
+            _make_rec(save_dir, "", "qr4.png", "four", order=8),
+        ]
+        move_records(records, [2, 3], "a", save_dir, meta)
+        assert records[2]["order"] == 2
+        assert records[3]["order"] == 3
+
+    def test_上書き対象の画像が欠損していて同名でも移動したファイルを削除しない(self, save_dir, meta):
+        records = [
+            _make_rec(save_dir, "", "a.png", "hello", content=b"IMPORTANT"),
+            {"text": "hello", "type": "Q", "path": "F/a.png", "error_correction": "M"},
+        ]
+        (save_dir / "F").mkdir()
+        move_records(records, [0], "F", save_dir, meta, overwrite=True)
+        assert len(records) == 1
+        assert (save_dir / records[0]["path"]).read_bytes() == b"IMPORTANT"
+
+    def test_移動元の画像が欠損しているときは上書きを拒否して移動先を残す(self, save_dir, meta):
+        records = [
+            {"text": "hello", "type": "Q", "path": "gone.png", "error_correction": "M"},
+            _make_rec(save_dir, "F", "good.png", "hello", content=b"GOOD"),
+        ]
+        with pytest.raises(ValueError):
+            move_records(records, [0], "F", save_dir, meta, overwrite=True)
+        assert len(records) == 2
+        assert (save_dir / "F" / "good.png").read_bytes() == b"GOOD"
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="シンボリックリンク作成権限が必要")
+    def test_移動先階層がsave_dir外を指すときはエラーで書き込まない(self, save_dir, meta, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (save_dir / "link").symlink_to(outside, target_is_directory=True)
+        records = [_make_rec(save_dir, "", "qr1.png", "hello")]
+        with pytest.raises(ValueError):
+            move_records(records, [0], "link", save_dir, meta)
+        assert list(outside.iterdir()) == []
+        assert (save_dir / "qr1.png").exists()
+
+    def test_巻き戻しにも失敗したときは実ファイルの位置にレコードを合わせてエラーにする(
+        self, save_dir, meta, monkeypatch
+    ):
+        records = [
+            _make_rec(save_dir, "", "1.png", "one"),
+            _make_rec(save_dir, "", "2.png", "two"),
+        ]
+        real_rename = os.rename
+        calls = []
+
+        def flaky_rename(src, dst):
+            calls.append(src)
+            if len(calls) >= 2:  # 2 件目の移動と、1 件目の巻き戻しの両方が失敗する
+                raise PermissionError("locked")
+            return real_rename(src, dst)
+
+        monkeypatch.setattr(os, "rename", flaky_rename)
+        with pytest.raises(OSError, match="戻せませんでした"):
+            move_records(records, [0, 1], "A", save_dir, meta)
+        monkeypatch.undo()
+        assert (save_dir / "A" / "1.png").exists()
+        assert [r["path"] for r in records] == ["A/1.png", "2.png"]
+        assert [r["path"] for r in load_metadata(meta)] == ["A/1.png", "2.png"]
+
+    def test_複数の移動元が同じ移動先レコードと衝突しても上書き件数は重複して数えない(self, save_dir, meta):
+        records = [
+            _make_rec(save_dir, "", "a.png", "hello"),
+            _make_rec(save_dir, "B", "b.png", "hello"),
+            _make_rec(save_dir, "F", "c.png", "hello"),
+        ]
+        result = move_records(records, [0, 1], "F", save_dir, meta, overwrite=True)
+        assert (result.moved, result.overwritten) == (2, 1)
+
+    def test_pathキーのないレコードを含むときはエラーで何も移動しない(self, save_dir, meta):
+        records = [_make_rec(save_dir, "", "qr1.png", "one"), {"text": "x", "type": "Q"}]
+        with pytest.raises(ValueError):
+            move_records(records, [0, 1], "a", save_dir, meta)
+        assert (save_dir / "qr1.png").exists()
+
+    def test_移動したレコードの識別性を保つ(self, save_dir, meta):
+        """app 側が現在選択中のレコードを参照で追跡するため、辞書オブジェクトは置き換えない。"""
+        rec = _make_rec(save_dir, "", "qr1.png", "hello")
+        records = [rec]
+        move_records(records, [0], "a", save_dir, meta)
+        assert records[0] is rec
+
+
+# ---------------------------------------------------------------------------
+# 階層の作成
+# ---------------------------------------------------------------------------
+
+class TestCreateFolder:
+    def test_ディレクトリを作成して階層名を返す(self, save_dir):
+        assert create_folder(save_dir, "  商品A ", []) == "商品A"
+        assert (save_dir / "商品A").is_dir()
+
+    def test_同名の階層が既にあればFolderExistsError(self, save_dir):
+        (save_dir / "商品A").mkdir()
+        with pytest.raises(FolderExistsError):
+            create_folder(save_dir, "商品A", [])
+
+    def test_大文字小文字違いの同名もFolderExistsError(self, save_dir):
+        (save_dir / "Foo").mkdir()
+        with pytest.raises(FolderExistsError):
+            create_folder(save_dir, "foo", [])
+
+    def test_レコードだけが参照している階層も存在扱いにする(self, save_dir):
+        records = [{"text": "x", "type": "Q", "path": "Foo/qr.png"}]
+        with pytest.raises(FolderExistsError):
+            create_folder(save_dir, "foo", records)
+
+    @pytest.mark.parametrize("name", ["", "..", "a/b", "CON", "a:b"])
+    def test_不正な名前はValueErrorで作成しない(self, save_dir, name):
+        with pytest.raises(ValueError):
+            create_folder(save_dir, name, [])
+        assert list(save_dir.iterdir()) == []
+
+    def test_FolderExistsErrorはValueErrorではない(self):
+        assert not issubclass(FolderExistsError, ValueError)
+
+
+# ---------------------------------------------------------------------------
+# 展開状態の設定（settings.json の手動編集・破損への防御）
+# ---------------------------------------------------------------------------
+
+class TestSanitizeOpenFolders:
+    def test_リスト以外は空リスト(self):
+        assert sanitize_open_folders("abc") == []
+        assert sanitize_open_folders(None) == []
+        assert sanitize_open_folders({"a": 1}) == []
+
+    def test_正しい階層名はそのまま残す(self):
+        assert sanitize_open_folders(["商品", "b"]) == ["商品", "b"]
+
+    def test_不正な名前と文字列以外は取り除く(self):
+        assert sanitize_open_folders(["ok", "..", "a/b", "C:\\x", 5, None, "../../etc"]) == ["ok"]
+
+    def test_大文字小文字違いの重複は先勝ちで1件にする(self):
+        assert sanitize_open_folders(["Foo", "foo"]) == ["Foo"]
+
+    def test_前後に空白のある名前は不正として取り除く(self):
+        assert sanitize_open_folders([" a "]) == []
+
+
+class TestLoadSettingsOpenFolders:
+    def test_デフォルトは空リスト(self, tmp_path):
+        assert load_settings(tmp_path / "settings.json")["open_folders"] == []
+
+    def test_保存した展開状態を読み返せる(self, tmp_path):
+        path = tmp_path / "settings.json"
+        save_settings({"open_folders": ["a", "b"]}, path)
+        assert load_settings(path)["open_folders"] == ["a", "b"]
+
+    def test_不正なパスを含む設定値は読み込み時に取り除く(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps({"open_folders": ["a", "../outside", "C:\\Windows"]}),
+                        encoding="utf-8")
+        assert load_settings(path)["open_folders"] == ["a"]
+
+    def test_デフォルト値のリストは呼び出し間で共有されない(self, tmp_path):
+        first = load_settings(tmp_path / "none.json")
+        first["open_folders"].append("x")
+        assert load_settings(tmp_path / "none.json")["open_folders"] == []
+
+
+# ---------------------------------------------------------------------------
+# アトミック書き込み（書き込み中の失敗で既存ファイルを壊さない）
+# ---------------------------------------------------------------------------
+
+class TestAtomicWrite:
+    def test_メタデータ保存後に一時ファイルが残らない(self, tmp_path):
+        path = tmp_path / "metadata.json"
+        save_metadata([{"text": "a"}], path)
+        assert [p.name for p in tmp_path.iterdir()] == ["metadata.json"]
+
+    def test_メタデータのシリアライズ失敗で既存ファイルを壊さない(self, tmp_path):
+        path = tmp_path / "metadata.json"
+        save_metadata([{"text": "keep"}], path)
+        with pytest.raises(TypeError):
+            save_metadata([{"text": object()}], path)
+        assert load_metadata(path) == [{"text": "keep"}]
+        assert [p.name for p in tmp_path.iterdir()] == ["metadata.json"]
+
+    def test_設定保存後に一時ファイルが残らない(self, tmp_path):
+        path = tmp_path / "settings.json"
+        save_settings({"pdf_cols": 2}, path)
+        assert [p.name for p in tmp_path.iterdir()] == ["settings.json"]
+
+    def test_設定のシリアライズ失敗で既存ファイルを壊さない(self, tmp_path):
+        path = tmp_path / "settings.json"
+        save_settings({"pdf_cols": 2}, path)
+        with pytest.raises(TypeError):
+            save_settings({"pdf_cols": object()}, path)
+        assert json.loads(path.read_text(encoding="utf-8")) == {"pdf_cols": 2}
+        assert [p.name for p in tmp_path.iterdir()] == ["settings.json"]
+
+
+# ---------------------------------------------------------------------------
+# 階層内ファイルの存在確認ラベル
+# ---------------------------------------------------------------------------
+
+class TestListLabelsWithStatusFolders:
+    def test_階層内のファイルが存在するレコードに警告を付けない(self, tmp_path):
+        (tmp_path / "a").mkdir()
+        (tmp_path / "a" / "qr.png").write_bytes(b"x")
+        records = [{"text": "hello", "type": "Q", "path": "a/qr.png"}]
+        assert list_labels_with_status(records, tmp_path) == ["[QR]  hello"]
+
+    def test_save_dir外を指す不正なpathは欠損扱いにする(self, tmp_path):
+        save_dir = tmp_path / "generated"
+        save_dir.mkdir()
+        (tmp_path / "outside.png").write_bytes(b"x")
+        records = [{"text": "hello", "type": "Q", "path": "../outside.png"}]
+        assert list_labels_with_status(records, save_dir) == ["⚠[QR]  hello"]

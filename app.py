@@ -7,20 +7,31 @@ import tkinter as tk
 import tomllib
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from PIL import Image, ImageTk
 
 from core import (
     SORT_OPTION_LABELS,
+    FolderExistsError,
+    MoveCollisionError,
     apply_custom_order,
+    build_record_path,
     clamp_panel_width,
+    create_folder,
+    find_move_collisions,
+    group_by_folder,
     has_duplicate,
+    list_folders,
     list_labels,
     list_labels_with_status,
     load_metadata,
     load_settings,
-    move_index,
+    move_records,
+    record_file_path,
+    record_folder,
+    resolve_folder_dir,
+    same_folder_name,
     save_metadata,
     save_settings,
     sort_records,
@@ -119,7 +130,10 @@ def _description_for_copy(rec: dict) -> str | None:
 # ---------------------------------------------------------------------------
 
 def show_enlarged(record: dict, root: tk.Tk, save_dir: Path) -> None:
-    resolved_path = save_dir / record["path"]
+    resolved_path = record_file_path(save_dir, record)
+    if resolved_path is None:
+        messagebox.showerror("エラー", "画像ファイルのパスが不正です。", parent=root)
+        return
     try:
         orig_img = Image.open(resolved_path).convert("RGB")
     except Exception as e:
@@ -202,13 +216,21 @@ class App:
         self.settings = load_settings(SETTINGS_FILE)
         self.current_path: str | None = None
         self._photo = None  # ImageTk.PhotoImage の GC 防止
-        self._filtered_indices: list[int] = []
         self._current_rec_idx: int | None = None
+        self._current_rec: dict | None = None  # プレビュー中のレコード（self.records の再代入・削除で位置がずれても追従する）
         self._tooltip_win: tk.Toplevel | None = None
         self._tooltip_after: str | None = None
         self._tooltip_rec_idx: int = -1
-        self._drag_start_lb_idx: int | None = None
-        self._drag_current_lb_idx: int | None = None
+        self._groups: dict[str, list[int]] = {"": []}  # 表示中のレコード位置（階層ごと・ソート済み。"" がルート）
+        self._folders: list[str] = []
+        self._iid_folder: dict[str, str] = {}          # 階層行の iid → 階層名
+        self._tree_recs: list[dict] = []               # 直近のツリー構築時のレコード（iid の r{n} は n 番目）
+        self._open_names: dict[str, str] = {f.lower(): f for f in self.settings["open_folders"]}  # 展開中の階層（小文字名 → 表示名）
+        self._context_rec_idx: int | None = None
+        self._press: tuple[str, str, int] | None = None  # (iid, クリックされた要素名, 修飾キー)
+        self._suppress_toggle: bool = False
+        self._drag_iid: str | None = None
+        self._drag_moved: bool = False
         self._dragging: bool = False
         self._drag_scroll_after_id: str | None = None
         self._drag_last_y: int = 0
@@ -226,6 +248,7 @@ class App:
 
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="CSVインポート", command=self._open_import_dialog)
+        file_menu.add_command(label="階層を作成...", command=self.on_create_folder)
         file_menu.add_command(label="フォルダを開く", command=self.on_open_folder)
         file_menu.add_separator()
         file_menu.add_command(label="終了", command=self.root.quit)
@@ -652,8 +675,8 @@ class App:
 
         tk.Label(lf, text="生成済み一覧",
                  font=(_FONT, 10, "bold"), anchor="w").pack(fill="x")
-        tk.Label(lf, text="ダブルクリック: 拡大  Ctrl+クリック: 複数選択",
-                 font=(_FONT, 8), fg="gray", anchor="w").pack(fill="x")
+        tk.Label(lf, text="ダブルクリック: 拡大  Ctrl+クリック: 複数選択\n右クリック: 階層へ移動・コピー",
+                 font=(_FONT, 8), fg="gray", anchor="w", justify="left").pack(fill="x")
 
         search_row = tk.Frame(lf)
         search_row.pack(fill="x", pady=(2, 0))
@@ -688,30 +711,41 @@ class App:
 
         btn_f = tk.Frame(lf)
         btn_f.pack(side="bottom", fill="x")
-        tk.Button(btn_f, text="削除", font=(_FONT, 10), width=8,
-                  command=self.on_delete).pack(side="left")
-        tk.Button(btn_f, text="フォルダを開く", font=(_FONT, 10),
-                  command=self.on_open_folder).pack(side="left", padx=(4, 0))
+        # 左パネルの最小幅でも 3 つ目のボタンが切れないよう、短い「削除」は固定幅にして
+        # 他の 2 つだけを grid の重みで伸縮させる
+        for col, (label, command) in enumerate([
+            ("削除", self.on_delete),
+            ("フォルダを開く", self.on_open_folder),
+            ("階層を作成", self.on_create_folder),
+        ]):
+            btn_f.columnconfigure(col, weight=0 if col == 0 else 1)
+            tk.Button(btn_f, text=label, font=(_FONT, 9), command=command).grid(
+                row=0, column=col, sticky="ew", padx=(0 if col == 0 else 4, 0))
 
-        # ── リストボックス（残り領域を占有）──────────────────────────────────
+        # ── 生成済み一覧（階層ツリー。残り領域を占有）──────────────────────────
         lb_f = tk.Frame(lf)
         lb_f.pack(expand=True, fill="both", pady=(2, 4))
 
         sb = tk.Scrollbar(lb_f)
         sb.pack(side="right", fill="y")
-        self.listbox = tk.Listbox(lb_f, font=("Consolas", 10),
-                                   yscrollcommand=sb.set, selectmode="extended",
-                                   activestyle="dotbox")
-        self.listbox.pack(expand=True, fill="both")
-        sb.config(command=self.listbox.yview)
-        self.listbox.bind("<<ListboxSelect>>", self._on_list_select)
-        self.listbox.bind("<Double-Button-1>", self._on_list_double)
-        self.listbox.bind("<Button-3>", self._on_list_right_click)
-        self.listbox.bind("<Motion>", self._on_list_hover)
-        self.listbox.bind("<Leave>", lambda _: self._hide_tooltip())
-        self.listbox.bind("<Button-1>", self._on_list_drag_start, add="+")
-        self.listbox.bind("<B1-Motion>", self._on_list_drag_motion)
-        self.listbox.bind("<ButtonRelease-1>", self._on_list_drag_release)
+        style = ttk.Style()
+        style.configure("Records.Treeview", font=("Consolas", 10), rowheight=20)
+        self.tree = ttk.Treeview(lb_f, show="tree", selectmode="extended",
+                                 style="Records.Treeview", yscrollcommand=sb.set)
+        self.tree.column("#0", stretch=True, minwidth=150, width=250)
+        self.tree.tag_configure("folder", font=("Consolas", 10, "bold"))
+        self.tree.pack(expand=True, fill="both")
+        sb.config(command=self.tree.yview)
+        self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        self.tree.bind("<<TreeviewOpen>>", lambda _: self._on_tree_open_close(True))
+        self.tree.bind("<<TreeviewClose>>", lambda _: self._on_tree_open_close(False))
+        self.tree.bind("<Double-Button-1>", self._on_tree_double)
+        self.tree.bind("<Button-3>", self._on_tree_right_click)
+        self.tree.bind("<Motion>", self._on_tree_hover)
+        self.tree.bind("<Leave>", lambda _: self._hide_tooltip())
+        self.tree.bind("<Button-1>", self._on_tree_press, add="+")
+        self.tree.bind("<B1-Motion>", self._on_tree_drag_motion)
+        self.tree.bind("<ButtonRelease-1>", self._on_tree_release)
 
         self._context_menu = tk.Menu(self.root, tearoff=0)
         self._context_menu.add_command(
@@ -726,6 +760,9 @@ class App:
         self._context_menu.add_command(
             label="画像を保存...", command=self._save_selected_image
         )
+        self._context_menu.add_separator()
+        self._move_menu = tk.Menu(self._context_menu, tearoff=0)
+        self._context_menu.add_cascade(label="階層へ移動", menu=self._move_menu)
 
         rf = tk.Frame(self._paned)
         self._paned.add(rf, minsize=300)
@@ -770,7 +807,9 @@ class App:
         else:
             indices = list(range(len(self.records)))
         key = _SORT_LABEL_TO_KEY.get(self._sort_var.get(), "date_new")
-        self._filtered_indices = sort_records(self.records, indices, key)
+        self._folders = list_folders(SAVE_DIR, self.records)
+        groups = group_by_folder(self.records, indices, self._folders)
+        self._groups = {f: sort_records(self.records, idxs, key) for f, idxs in groups.items()}
         self._populate_list()
 
     def _on_sort_change(self) -> None:
@@ -779,14 +818,135 @@ class App:
         save_settings(self.settings, SETTINGS_FILE)
         self._filter_records()
 
-    def _rec_idx(self, lb_idx: int) -> int:
-        return self._filtered_indices[lb_idx]
+    def _is_searching(self) -> bool:
+        return bool(self._search_var.get().strip())
+
+    def _rec_idx_of(self, iid: str) -> int | None:
+        """レコード行の iid からレコード位置を返す。階層行・空文字は None。"""
+        if iid and iid not in self._iid_folder and iid.startswith("r"):
+            return int(iid[1:])
+        return None
+
+    def _is_open(self, iid: str) -> bool:
+        return str(self.tree.item(iid, "open")).lower() in ("1", "true")
+
+    def _walk_viewable(self):
+        """画面に見えている行（親の階層が展開済みの行）を上から順に返す。
+
+        折りたたんだ階層の中の行が選択されたまま残っても、削除などの対象にしないために使う。
+        """
+        for top in self.tree.get_children(""):
+            yield top
+            if top in self._iid_folder and self._is_open(top):
+                yield from self.tree.get_children(top)
+
+    def _selected_record_indices(self, expand_folders: bool = False) -> list[int]:
+        """選択中のレコード位置を表示順で返す。expand_folders=True なら階層行は配下の全レコードを含める。"""
+        selected = set(self.tree.selection())
+        result: list[int] = []
+        seen: set[int] = set()
+
+        def add(idx: int | None) -> None:
+            if idx is not None and idx not in seen:
+                seen.add(idx)
+                result.append(idx)
+
+        for iid in self._walk_viewable():
+            if iid not in selected:
+                continue
+            if iid in self._iid_folder:
+                if expand_folders:
+                    for child in self.tree.get_children(iid):
+                        add(self._rec_idx_of(child))
+            else:
+                add(self._rec_idx_of(iid))
+        return result
+
+    def _selected_folder_name(self) -> str | None:
+        """選択中の階層行のうち表示順で先頭の階層名。なければ None。"""
+        selected = set(self.tree.selection())
+        for iid in self.tree.get_children(""):
+            if iid in selected and iid in self._iid_folder:
+                return self._iid_folder[iid]
+        return None
+
+    def _current_dest_folder(self) -> str:
+        """新規生成の保存先階層。選択中の階層行、または選択中のコードが属する階層。未選択ならルート。"""
+        selected = set(self.tree.selection())
+        for iid in self._walk_viewable():
+            if iid not in selected:
+                continue
+            if iid in self._iid_folder:
+                return self._iid_folder[iid]
+            idx = self._rec_idx_of(iid)
+            if idx is not None:
+                return record_folder(self.records[idx])
+        return ""
+
+    def _select_folder(self, name: str) -> None:
+        for iid, folder in self._iid_folder.items():
+            if same_folder_name(folder, name):
+                self.tree.selection_set(iid)
+                self.tree.focus(iid)
+                self.tree.see(iid)
+                return
+
+    def _remember_open(self, folder: str, opened: bool) -> None:
+        """階層の展開状態を記憶し settings.json に保存する。"""
+        key = folder.lower()
+        if (key in self._open_names) == opened:
+            return
+        if opened:
+            self._open_names[key] = folder
+        else:
+            del self._open_names[key]
+        # 作成直後の階層は self._folders に未反映のため key を加え、削除済みの階層は保存対象から外す
+        existing = {f.lower() for f in self._folders} | {key}
+        self.settings["open_folders"] = [n for k, n in self._open_names.items() if k in existing]
+        save_settings(self.settings, SETTINGS_FILE)
 
     def _populate_list(self) -> None:
-        self.listbox.delete(0, tk.END)
+        """self._folders / self._groups の内容でツリーを作り直す。選択とスクロール位置は維持する。"""
+        tree = self.tree
+        if self._current_rec is not None:
+            self._current_rec_idx = next(
+                (i for i, r in enumerate(self.records) if r is self._current_rec), None
+            )
+        selected = tree.selection()
+        # 削除などでレコードの位置がずれても別のコードを選択し直さないよう、位置ではなくレコード自体で復元する
+        selected_recs = [
+            self._tree_recs[i] for i in map(self._rec_idx_of, selected)
+            if i is not None and i < len(self._tree_recs)
+        ]
+        selected_folders = {self._iid_folder[i] for i in selected if i in self._iid_folder}
+        view = tree.yview()
+
+        tree.delete(*tree.get_children(""))
+        self._iid_folder = {}
         labels = list_labels_with_status(self.records, SAVE_DIR)
-        for i in self._filtered_indices:
-            self.listbox.insert(tk.END, labels[i])
+        searching = self._is_searching()
+        for n, folder in enumerate(self._folders):
+            idxs = self._groups.get(folder, [])
+            if searching and not idxs:
+                continue
+            fiid = f"d{n}"
+            self._iid_folder[fiid] = folder
+            # 検索中は該当コードを隠さないよう、保存済みの展開状態にかかわらず開く
+            tree.insert("", "end", iid=fiid, text=f"{folder}  ({len(idxs)})", tags=("folder",),
+                        open=searching or folder.lower() in self._open_names)
+            for i in idxs:
+                tree.insert(fiid, "end", iid=f"r{i}", text=labels[i])
+        for i in self._groups.get("", []):
+            tree.insert("", "end", iid=f"r{i}", text=labels[i])
+
+        self._tree_recs = list(self.records)
+        position = {id(r): i for i, r in enumerate(self._tree_recs)}
+        restore = [f"r{position[id(r)]}" for r in selected_recs if id(r) in position]
+        restore = [iid for iid in restore if tree.exists(iid)]
+        restore += [iid for iid, f in self._iid_folder.items() if f in selected_folders]
+        if restore:
+            tree.selection_set(restore)
+        tree.yview_moveto(view[0])
 
     def _refresh_detail_label(self, rec: dict) -> None:
         """detail_label をレコード内容で更新する（説明欄フォーカス復帰時にも使用）。"""
@@ -805,12 +965,19 @@ class App:
         self.detail_label.config(text=label_text)
 
     def _show_record(self, rec: dict) -> None:
-        self.current_path = str(SAVE_DIR / rec["path"])
+        path = record_file_path(SAVE_DIR, rec)
+        self.current_path = str(path) if path is not None else None
+        self._current_rec = rec
         self._current_rec_idx = next(
             (i for i, r in enumerate(self.records) if r is rec), None
         )
         self._refresh_detail_label(rec)
         self._desc_var.set(rec.get("description", ""))
+        if path is None:
+            self.preview_label.config(image="", text="ファイルが見つかりません",
+                                       font=(_FONT, 11), fg="gray")
+            self._photo = None
+            return
         self._redraw_preview()
 
     def _redraw_preview(self) -> None:
@@ -839,17 +1006,21 @@ class App:
 
     # ── イベントハンドラ ──────────────────────────────────────────────────
 
-    def _on_list_drag_start(self, event: tk.Event) -> None:
-        idx = self.listbox.nearest(event.y)
-        if idx < 0 or idx >= len(self._filtered_indices):
+    def _on_tree_press(self, event: tk.Event) -> None:
+        self._press = None
+        self._drag_iid = None
+        self._drag_moved = False
+        self._dragging = False
+        iid = self.tree.identify_row(event.y)
+        if not iid:
             return
-        if self._search_var.get().strip():
-            return  # 検索中はドラッグ並び替えを無効化
-        self._drag_start_lb_idx = idx
-        self._drag_current_lb_idx = idx
+        modifiers = event.state & 0x0005  # Shift | Control
+        self._press = (iid, self.tree.identify_element(event.x, event.y), modifiers)
+        if self._rec_idx_of(iid) is not None and not modifiers and not self._is_searching():
+            self._drag_iid = iid  # 検索中・修飾キー併用時はドラッグ並び替えを無効化
 
-    def _on_list_drag_motion(self, event: tk.Event) -> None:
-        if self._drag_start_lb_idx is None:
+    def _on_tree_drag_motion(self, event: tk.Event) -> None:
+        if self._drag_iid is None:
             return
         self._dragging = True
         self._hide_tooltip()
@@ -858,29 +1029,20 @@ class App:
         self._apply_drag_target(event.y)
 
     def _apply_drag_target(self, y: int) -> None:
-        """カーソル位置 y に応じてドラッグ中のアイテムを並べ替え、一覧を再描画する。
-
-        スクロール位置を維持したまま再描画する（_populate_list は delete→insert のため
-        何もしないとスクロールが先頭に戻ってしまう）。
-        """
-        target = self.listbox.nearest(y)
-        if target < 0 or target >= len(self._filtered_indices):
+        """ドラッグ中の行を、同じ階層内（ルートならルート直下のコード同士）でカーソル位置へ移動する。"""
+        drag = self._drag_iid
+        target = self.tree.identify_row(y)
+        if drag is None or not target or target == drag or target in self._iid_folder:
             return
-        if target == self._drag_current_lb_idx:
+        parent = self.tree.parent(drag)
+        if self.tree.parent(target) != parent:
             return
-        self._filtered_indices = move_index(
-            self._filtered_indices, self._drag_current_lb_idx, target
-        )
-        self._drag_current_lb_idx = target
-        view = self.listbox.yview()
-        self._populate_list()
-        self.listbox.yview_moveto(view[0])
-        self.listbox.selection_clear(0, tk.END)
-        self.listbox.selection_set(target)
+        self.tree.move(drag, parent, self.tree.index(target))
+        self._drag_moved = True
 
     def _update_drag_autoscroll(self, y: int) -> None:
         """カーソルが一覧の上端・下端付近にあれば自動スクロールを開始し、離れたら止める。"""
-        height = self.listbox.winfo_height()
+        height = self.tree.winfo_height()
         if y < _DRAG_SCROLL_MARGIN:
             direction = -1
         elif y > height - _DRAG_SCROLL_MARGIN:
@@ -894,7 +1056,7 @@ class App:
             self._run_drag_autoscroll(direction)
 
     def _run_drag_autoscroll(self, direction: int) -> None:
-        self.listbox.yview_scroll(direction, "units")
+        self.tree.yview_scroll(direction, "units")
         self._apply_drag_target(self._drag_last_y)
         self._drag_scroll_after_id = self.root.after(
             _DRAG_SCROLL_INTERVAL_MS, lambda: self._run_drag_autoscroll(direction)
@@ -905,36 +1067,60 @@ class App:
             self.root.after_cancel(self._drag_scroll_after_id)
             self._drag_scroll_after_id = None
 
-    def _on_list_drag_release(self, _: tk.Event) -> None:
+    def _on_tree_release(self, event: tk.Event) -> None:
         self._cancel_drag_autoscroll()
-        if self._drag_start_lb_idx is None:
-            return
-        moved = self._dragging and self._drag_current_lb_idx != self._drag_start_lb_idx
-        self._drag_start_lb_idx = None
-        self._drag_current_lb_idx = None
+        press, drag_iid, moved = self._press, self._drag_iid, self._drag_moved
+        suppress = self._suppress_toggle
+        self._press = None
+        self._drag_iid = None
+        self._drag_moved = False
         self._dragging = False
-        if not moved:
-            return
+        self._suppress_toggle = False
 
-        apply_custom_order(self.records, self._filtered_indices)
+        if moved and drag_iid is not None:
+            self._finish_drag_reorder(drag_iid)
+            return
+        if press is None or suppress:
+            return
+        iid, element, modifiers = press
+        # 階層行のクリックで展開/折りたたみ。矢印は Treeview 標準の動作に任せる
+        if (iid in self._iid_folder and not modifiers
+                and not element.endswith("indicator")
+                and self.tree.identify_row(event.y) == iid):
+            opened = not self._is_open(iid)
+            self.tree.item(iid, open=opened)
+            if not self._is_searching():
+                self._remember_open(self._iid_folder[iid], opened)
+
+    def _finish_drag_reorder(self, drag_iid: str) -> None:
+        """ドラッグで並べ替えた階層内の順序をカスタム順として保存する。"""
+        parent = self.tree.parent(drag_iid)
+        ordered = [
+            idx for idx in map(self._rec_idx_of, self.tree.get_children(parent))
+            if idx is not None
+        ]
+        apply_custom_order(self.records, ordered)
         save_metadata(self.records, METADATA_FILE)
 
-        view = self.listbox.yview()  # _filter_records の再描画でスクロールが先頭に戻るため保存
         custom_label = SORT_OPTION_LABELS["custom"]
         if self._sort_var.get() != custom_label:
             self._sort_var.set(custom_label)  # trace_add 経由で _on_sort_change → _filter_records
         else:
             self._filter_records()  # 既にカスタム順選択中は trace が発火しないため手動で再描画
-        self.listbox.yview_moveto(view[0])
 
-    def _on_list_hover(self, event: tk.Event) -> None:
+    def _on_tree_open_close(self, opened: bool) -> None:
+        """矢印クリック・キー操作による展開/折りたたみを記憶する。"""
+        iid = self.tree.focus()
+        if iid in self._iid_folder and not self._is_searching():
+            self._remember_open(self._iid_folder[iid], opened)
+
+    def _on_tree_hover(self, event: tk.Event) -> None:
         if self._dragging:
             return
-        idx = self.listbox.nearest(event.y)
-        if idx < 0 or idx >= len(self._filtered_indices):
+        rec_idx = self._rec_idx_of(self.tree.identify_row(event.y))
+        if rec_idx is None:
             self._hide_tooltip()
             return
-        rec_idx = self._rec_idx(idx)
         if rec_idx == self._tooltip_rec_idx:
             return  # 同じ行のまま移動 → 再スケジュール不要
         self._hide_tooltip()
@@ -990,31 +1176,58 @@ class App:
             self._tooltip_win = None
         self._tooltip_rec_idx = -1
 
-    def _on_list_select(self, _: tk.Event) -> None:
-        sel = self.listbox.curselection()
-        if not sel or sel[-1] >= len(self._filtered_indices):
+    def _on_tree_select(self, _: tk.Event) -> None:
+        indices = self._selected_record_indices()
+        if not indices:
             return
         self._save_description()
-        self._show_record(self.records[self._rec_idx(sel[-1])])
+        self._show_record(self.records[indices[-1]])
 
-    def _on_list_double(self, _: tk.Event) -> None:
-        sel = self.listbox.curselection()
-        if not sel or sel[0] >= len(self._filtered_indices):
-            return
-        show_enlarged(self.records[self._rec_idx(sel[0])], self.root, SAVE_DIR)
+    def _on_tree_double(self, event: tk.Event) -> str | None:
+        iid = self.tree.identify_row(event.y)
+        if iid in self._iid_folder:
+            # 1 回目のクリックで切り替え済みのため、標準の切り替えと 2 回目のクリックは無効化する
+            self._suppress_toggle = True
+            return "break"
+        idx = self._rec_idx_of(iid)
+        if idx is None:
+            return None
+        show_enlarged(self.records[idx], self.root, SAVE_DIR)
+        return None
 
-    def _on_list_right_click(self, event: tk.Event) -> None:
-        idx = self.listbox.nearest(event.y)
-        if idx < 0 or idx >= len(self._filtered_indices):
+    def _on_tree_right_click(self, event: tk.Event) -> None:
+        iid = self.tree.identify_row(event.y)
+        idx = self._rec_idx_of(iid)
+        if idx is None:
             return
-        self.listbox.selection_clear(0, tk.END)
-        self.listbox.selection_set(idx)
-        rec = self.records[self._rec_idx(idx)]
+        if iid not in self.tree.selection():
+            self.tree.selection_set(iid)
+        self._context_rec_idx = idx
+        rec = self.records[idx]
         state = tk.NORMAL if _description_for_copy(rec) else tk.DISABLED
         self._context_menu.entryconfig("説明をコピー", state=state)
-        img_state = tk.NORMAL if (SAVE_DIR / rec["path"]).exists() else tk.DISABLED
+        path = record_file_path(SAVE_DIR, rec)
+        img_state = tk.NORMAL if path is not None and path.exists() else tk.DISABLED
         self._context_menu.entryconfig("画像を保存...", state=img_state)
+        self._rebuild_move_menu()
         self._context_menu.tk_popup(event.x_root, event.y_root)
+
+    def _rebuild_move_menu(self) -> None:
+        """右クリックメニューの「階層へ移動」を、現在の階層一覧と選択内容で作り直す。"""
+        self._move_menu.delete(0, "end")
+        indices = self._selected_record_indices()
+        sources = {record_folder(self.records[i]).lower() for i in indices}
+
+        def add(label: str, dest: str) -> None:
+            same = sources == {dest.lower()}
+            self._move_menu.add_command(
+                label=label, state=tk.DISABLED if same or not indices else tk.NORMAL,
+                command=lambda: self._move_selected_to(dest),
+            )
+
+        add("（ルート）", "")
+        for folder in self._folders:
+            add(folder, folder)
 
     def _on_desc_label_enter(self, event: tk.Event) -> None:
         """「説明:」ラベルホバー時: 生成済一覧と同じポップアップで説明を表示する。"""
@@ -1043,9 +1256,7 @@ class App:
         if rec.get("description", "") != new_desc:
             rec["description"] = new_desc
             save_metadata(self.records, METADATA_FILE)
-            view = self.listbox.yview()
             self._populate_list()
-            self.listbox.yview_moveto(view[0])
 
     def _reset_description(self) -> None:
         if self._current_rec_idx is None:
@@ -1055,22 +1266,25 @@ class App:
         if rec.get("description", "") != "":
             rec["description"] = ""
             save_metadata(self.records, METADATA_FILE)
-            view = self.listbox.yview()
             self._populate_list()
-            self.listbox.yview_moveto(view[0])
+
+    def _context_record(self) -> dict | None:
+        """右クリックされたコードのレコード。"""
+        idx = self._context_rec_idx
+        return self.records[idx] if idx is not None and idx < len(self.records) else None
 
     def _copy_selected_text(self) -> None:
-        sel = self.listbox.curselection()
-        if not sel or sel[0] >= len(self._filtered_indices):
+        rec = self._context_record()
+        if rec is None:
             return
         self.root.clipboard_clear()
-        self.root.clipboard_append(self.records[self._rec_idx(sel[0])]["text"])
+        self.root.clipboard_append(rec["text"])
 
     def _copy_selected_description(self) -> None:
-        sel = self.listbox.curselection()
-        if not sel or sel[0] >= len(self._filtered_indices):
+        rec = self._context_record()
+        if rec is None:
             return
-        desc = _description_for_copy(self.records[self._rec_idx(sel[0])])
+        desc = _description_for_copy(rec)
         if desc is None:
             return
         self.root.clipboard_clear()
@@ -1080,27 +1294,32 @@ class App:
         # clip.exe はテキスト専用のため画像コピー不可。
         # pywin32 依存を避けるため PowerShell の SetImage を使用。
         # [Windows.Forms.Clipboard]::SetImage() が依存追加なしの最小構成。
-        sel = self.listbox.curselection()
-        if not sel or sel[0] >= len(self._filtered_indices):
+        rec = self._context_record()
+        if rec is None:
             return
-        path = SAVE_DIR / self.records[self._rec_idx(sel[0])]["path"]
+        path = record_file_path(SAVE_DIR, rec)
+        if path is None or not path.exists():
+            messagebox.showerror("エラー", "画像ファイルが見つかりません。", parent=self.root)
+            return
+        # 階層名・フォルダ名に ' や ; が含まれてもコマンドとして解釈されないよう、
+        # パスはコマンド文字列に埋め込まず環境変数で渡す
+        env = {**os.environ, "QR_COPY_IMAGE_PATH": str(path)}
         try:
             subprocess.run(
                 ["powershell", "-command",
-                 f"Add-Type -A System.Windows.Forms,System.Drawing;"
-                 f"[Windows.Forms.Clipboard]::SetImage([Drawing.Image]::FromFile('{path}'))"],
-                check=True,
+                 "Add-Type -A System.Windows.Forms,System.Drawing;"
+                 "[Windows.Forms.Clipboard]::SetImage([Drawing.Image]::FromFile($env:QR_COPY_IMAGE_PATH))"],
+                check=True, env=env,
             )
         except Exception as e:
             messagebox.showerror("エラー", f"画像のコピーに失敗しました:\n{e}", parent=self.root)
 
     def _save_selected_image(self) -> None:
-        sel = self.listbox.curselection()
-        if not sel or sel[0] >= len(self._filtered_indices):
+        rec = self._context_record()
+        if rec is None:
             return
-        rec = self.records[self._rec_idx(sel[0])]
-        src = SAVE_DIR / rec["path"]
-        if not src.exists():
+        src = record_file_path(SAVE_DIR, rec)
+        if src is None or not src.exists():
             messagebox.showerror("エラー", "画像ファイルが見つかりません。", parent=self.root)
             return
         dest = filedialog.asksaveasfilename(
@@ -1117,7 +1336,8 @@ class App:
         except Exception as e:
             messagebox.showerror("エラー", f"画像の保存に失敗しました:\n{e}", parent=self.root)
 
-    def _ask_duplicate(self, text: str, code_type: str, error_correction: str | None = None) -> bool:
+    def _ask_duplicate(self, text: str, code_type: str, error_correction: str | None = None,
+                       folder: str = "") -> bool:
         """重複確認ダイアログを表示し、生成を続けるか返す。「これ以降は表示しない」で警告を無効化できる。"""
         top = tk.Toplevel(self.root)
         top.title("重複確認")
@@ -1126,7 +1346,8 @@ class App:
 
         disp_type = _TYPE_DISP.get(code_type, code_type)
         type_label = f"{disp_type}:{error_correction}" if code_type == "Q" and error_correction else disp_type
-        tk.Label(top, text=f"[{type_label}]  {text}\nはすでに存在します。追加しますか？",
+        where = f"階層「{folder}」に " if folder else ""
+        tk.Label(top, text=f"{where}[{type_label}]  {text}\nはすでに存在します。追加しますか？",
                  font=(_FONT, 10), padx=16, pady=12, justify="left").pack()
 
         no_warn_var = tk.BooleanVar(value=False)
@@ -1170,37 +1391,45 @@ class App:
                                    parent=self.root)
             return
 
+        dest = self._current_dest_folder()
         ec = self._ec_var.get() if code_type == "Q" else None
         enc = self._enc_var.get() if code_type == "Q" else None
+        in_dest = [r for r in self.records if same_folder_name(record_folder(r), dest)]
         if self.settings.get("warn_on_duplicate", True) and has_duplicate(
-            text, code_type, self.records, error_correction=ec, encoding=enc
+            text, code_type, in_dest, error_correction=ec, encoding=enc
         ):
-            if not self._ask_duplicate(text, code_type, error_correction=ec):
+            if not self._ask_duplicate(text, code_type, error_correction=ec, folder=dest):
                 return
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         try:
+            dest_dir = resolve_folder_dir(SAVE_DIR, dest)
+            if dest:
+                dest_dir.mkdir(exist_ok=True)
             if code_type == "Q":
-                fp = SAVE_DIR / f"qr_{ts}.png"
+                fp = dest_dir / f"qr_{ts}.png"
                 generate_qr(text, fp, error_correction=self._ec_var.get(),
                             encoding=self._enc_var.get())
-                rec = {"text": text, "type": code_type, "path": fp.name,
+                rec = {"text": text, "type": code_type,
+                       "path": build_record_path(dest, fp.name),
                        "error_correction": self._ec_var.get(),
                        "encoding": self._enc_var.get()}
             else:
-                fp = generate_barcode_file(text, SAVE_DIR / f"bar_{ts}")
-                rec = {"text": text, "type": code_type, "path": fp.name}
+                fp = generate_barcode_file(text, dest_dir / f"bar_{ts}")
+                rec = {"text": text, "type": code_type,
+                       "path": build_record_path(dest, fp.name)}
             self.records.append(rec)
             save_metadata(self.records, METADATA_FILE)
 
+            if dest:
+                self._remember_open(dest, True)  # 生成したコードが折りたたまれた階層に隠れないようにする
             self._search_var.set("")  # 検索をクリアして新規アイテムを確実に表示
             self._filter_records()
-            new_rec_idx = len(self.records) - 1
-            lb_pos = (self._filtered_indices.index(new_rec_idx)
-                      if new_rec_idx in self._filtered_indices else 0)
-            self.listbox.selection_clear(0, tk.END)
-            self.listbox.selection_set(lb_pos)
-            self.listbox.see(lb_pos)
+            iid = f"r{len(self.records) - 1}"
+            if self.tree.exists(iid):
+                self.tree.selection_set(iid)
+                self.tree.focus(iid)
+                self.tree.see(iid)
             self._show_record(rec)
             if code_type == "Q":
                 self.qr_text.delete("1.0", "end")
@@ -1212,39 +1441,33 @@ class App:
                                  parent=self.root)
 
     def on_delete(self) -> None:
-        sel = self.listbox.curselection()
-        if not sel:
+        rec_indices = self._selected_record_indices()
+        if not rec_indices:
             messagebox.showinfo("削除", "削除するアイテムを選択してください。",
                                 parent=self.root)
             return
-        rec_indices = [self._rec_idx(i) for i in sel if i < len(self._filtered_indices)]
         count = len(rec_indices)
         msg = f"{count} 件削除しますか？" if count > 1 else f"削除しますか？\n{list_labels(self.records)[rec_indices[0]]}"
         if messagebox.askyesno("確認", msg, parent=self.root):
             for i in sorted(rec_indices, reverse=True):
-                try:
-                    (SAVE_DIR / self.records[i]["path"]).unlink(missing_ok=True)
-                except Exception:
-                    pass
+                path = record_file_path(SAVE_DIR, self.records[i])
+                if path is not None:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
                 self.records.pop(i)
             save_metadata(self.records, METADATA_FILE)
-            view = self.listbox.yview()
             self._filter_records()
-            self.listbox.yview_moveto(view[0])
-            self.preview_label.config(image="")
-            self._photo = None
-            self.detail_label.config(text="")
-            self._desc_var.set("")
-            self._current_rec_idx = None
-            self.current_path = None
+            self._clear_preview()
 
     def on_export_pdf(self) -> None:
-        sel = self.listbox.curselection()
-        if not sel:
+        # 階層行を選択した場合は、その階層のコードをすべて出力する
+        selected = [self.records[i] for i in self._selected_record_indices(expand_folders=True)]
+        if not selected:
             messagebox.showinfo("PDF出力", "出力するアイテムを選択してください。\n(Ctrl+クリックで複数選択)",
                                 parent=self.root)
             return
-        selected = [self.records[self._rec_idx(i)] for i in sel if i < len(self._filtered_indices)]
         default_name = f"qr_barcode_{datetime.now().strftime('%Y%m%d')}.pdf"
         path = filedialog.asksaveasfilename(
             parent=self.root,
@@ -1270,10 +1493,150 @@ class App:
             messagebox.showerror("エラー", f"PDF出力に失敗しました:\n{e}", parent=self.root)
 
     def on_open_folder(self) -> None:
-        resolved = str(SAVE_DIR.resolve())
+        target = SAVE_DIR
+        folder = self._selected_folder_name()
+        if folder and (SAVE_DIR / folder).is_dir():
+            target = SAVE_DIR / folder  # 階層行を選択中はその階層を開く
+        resolved = str(target.resolve())
         if sys.platform == "win32":
             os.startfile(resolved)
         elif sys.platform == "darwin":
             subprocess.run(["open", resolved])
         else:
             subprocess.run(["xdg-open", resolved])
+
+    # ── 階層の作成・移動 ──────────────────────────────────────────────────────
+
+    def on_create_folder(self) -> None:
+        initial = ""
+        while True:
+            name = simpledialog.askstring(
+                "階層を作成", "階層名を入力してください:", initialvalue=initial, parent=self.root,
+            )
+            if name is None:
+                return
+            try:
+                created = create_folder(SAVE_DIR, name, self.records)
+            except FolderExistsError:
+                messagebox.showinfo(
+                    "階層を作成", f"「{name.strip()}」は既に作成されています。", parent=self.root,
+                )
+                self._search_var.set("")
+                self._filter_records()
+                self._select_folder(name.strip())
+                return
+            except ValueError as e:
+                messagebox.showerror("階層を作成", str(e), parent=self.root)
+                initial = name
+                continue
+            except OSError as e:
+                messagebox.showerror("階層を作成", f"作成に失敗しました:\n{e}", parent=self.root)
+                return
+            self._remember_open(created, True)
+            self._search_var.set("")  # 空の階層は検索中だと表示されないため、検索をクリアして表示する
+            self._filter_records()
+            self._select_folder(created)
+            return
+
+    def _ask_move_overwrite(self, collisions: list[tuple[int, int]], dest: str) -> bool:
+        """移動先に同一コードがあるときの上書き確認。初期フォーカスは「キャンセル」。"""
+        labels = list_labels(self.records)
+        targets = list(dict.fromkeys(j for _, j in collisions))
+        shown = [labels[j] for j in targets[:8]]
+        if len(targets) > len(shown):
+            shown.append(f"… 他 {len(targets) - len(shown)} 件")
+        where = f"階層「{dest}」" if dest else "ルート"
+
+        top = tk.Toplevel(self.root)
+        top.title("移動先に同じコードがあります")
+        top.resizable(False, False)
+        top.transient(self.root)
+
+        message = (
+            f"移動先の{where}に、同じ内容のコードが {len(targets)} 件あります。\n"
+            "上書きすると、移動先の既存のコード（画像ファイルを含む）は削除され、元に戻せません。"
+        )
+        tk.Label(top, text=message, font=(_FONT, 10), padx=16, pady=12, justify="left").pack()
+        tk.Label(top, text="\n".join(shown), font=(_FONT, 9), padx=16, justify="left",
+                 anchor="w").pack(fill="x")
+
+        result = [False]
+
+        def on_overwrite() -> None:
+            result[0] = True
+            top.destroy()
+
+        def on_cancel() -> None:
+            top.destroy()
+
+        btn_f = tk.Frame(top)
+        btn_f.pack(pady=12)
+        tk.Button(btn_f, text="上書き", font=(_FONT, 10), width=10,
+                  command=on_overwrite).pack(side="left", padx=6)
+        cancel_btn = tk.Button(btn_f, text="キャンセル", font=(_FONT, 10), width=10,
+                               default="active", command=on_cancel)
+        cancel_btn.pack(side="left", padx=6)
+
+        def on_return(_: tk.Event) -> None:
+            focused = top.focus_get()
+            (focused if isinstance(focused, tk.Button) else cancel_btn).invoke()
+
+        top.bind("<Return>", on_return)
+        top.bind("<Escape>", lambda _: on_cancel())
+        top.protocol("WM_DELETE_WINDOW", on_cancel)
+        top.grab_set()
+        cancel_btn.focus_force()  # ウィンドウマネージャが初期フォーカスを渡さない環境でも「キャンセル」に当てる
+        self.root.wait_window(top)
+        return result[0]
+
+    def _move_selected_to(self, dest: str) -> None:
+        """選択中のコードを階層 dest（空文字ならルート）へ移動する。"""
+        self._save_description()
+        movable = [
+            i for i in self._selected_record_indices()
+            if not same_folder_name(record_folder(self.records[i]), dest)
+        ]
+        if not movable:
+            return
+        moved_recs = [self.records[i] for i in movable]
+        current = self.records[self._current_rec_idx] if self._current_rec_idx is not None else None
+
+        overwrite = False
+        collisions = find_move_collisions(self.records, movable, dest)
+        if collisions:
+            if not self._ask_move_overwrite(collisions, dest):
+                return
+            overwrite = True
+        try:
+            move_records(self.records, movable, dest, SAVE_DIR, METADATA_FILE, overwrite=overwrite)
+        except MoveCollisionError:
+            messagebox.showerror("エラー", "移動先の内容が変更されたため中止しました。",
+                                 parent=self.root)
+            return
+        except (ValueError, OSError) as e:
+            messagebox.showerror("エラー", f"移動に失敗しました:\n{e}", parent=self.root)
+            self._filter_records()
+            return
+
+        if dest:
+            self._remember_open(dest, True)
+        self._filter_records()
+        position = {id(r): i for i, r in enumerate(self.records)}
+        iids = [f"r{position[id(r)]}" for r in moved_recs if id(r) in position]
+        iids = [iid for iid in iids if self.tree.exists(iid)]
+        if iids:
+            self.tree.selection_set(iids)
+            self.tree.see(iids[0])
+        if current is not None and id(current) in position:
+            self._show_record(current)  # 移動でファイルの場所が変わったためプレビューと詳細を更新する
+        else:
+            self._clear_preview()
+
+    def _clear_preview(self) -> None:
+        self.preview_label.config(image="")
+        self._photo = None
+        self.detail_label.config(text="")
+        self._desc_var.set("")
+        self._current_rec = None
+        self._current_rec_idx = None
+        self.current_path = None

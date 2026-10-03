@@ -316,3 +316,26 @@ class TestGeneratePdfGrid:
         output = tmp_path / "out.pdf"
         generate_pdf_grid(records, output, moved_dir)
         assert output.exists()
+
+    def test_階層内の画像を解決できる(self, tmp_path, monkeypatch):
+        (tmp_path / "商品").mkdir()
+        Image.new("RGB", (200, 200), "white").save(str(tmp_path / "商品" / "test.png"))
+        opened = []
+        real_open = Image.open
+        monkeypatch.setattr(Image, "open", lambda p, *a, **k: (opened.append(Path(p)), real_open(p, *a, **k))[1])
+        records = [{"text": "hello", "type": "Q", "path": "商品/test.png"}]
+        generate_pdf_grid(records, tmp_path / "out.pdf", tmp_path)
+        assert opened == [tmp_path / "商品" / "test.png"]
+
+    def test_save_dir外を指すpathの画像は読み込まない(self, tmp_path, monkeypatch):
+        save_dir = tmp_path / "generated"
+        save_dir.mkdir()
+        Image.new("RGB", (200, 200), "white").save(str(tmp_path / "outside.png"))
+        opened = []
+        real_open = Image.open
+        monkeypatch.setattr(Image, "open", lambda p, *a, **k: (opened.append(Path(p)), real_open(p, *a, **k))[1])
+        records = [{"text": "hello", "type": "Q", "path": "../outside.png"}]
+        output = tmp_path / "out.pdf"
+        generate_pdf_grid(records, output, save_dir)
+        assert output.exists()
+        assert opened == []
