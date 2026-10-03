@@ -11,16 +11,21 @@ from pathlib import Path
 
 import segno
 
-from core import has_duplicate
+from core import (
+    build_record_path,
+    has_duplicate,
+    record_folder,
+    validate_folder_name,
+)
 
 # ---------------------------------------------------------------------------
 # 定数
 # ---------------------------------------------------------------------------
 
-TEMPLATE_HEADER = "text,type,description,error_correction,encoding"
+TEMPLATE_HEADER = "text,type,description,error_correction,encoding,folder"
 TEMPLATE_EXAMPLE_ROWS = [
-    "https://example.com,QR,説明（省略可）,M,UTF-8",
-    "12345678901234,Barcode,説明（省略可）,,",
+    "https://example.com,QR,説明（省略可）,M,UTF-8,商品",
+    "12345678901234,Barcode,説明（省略可）,,,",
 ]
 
 _VALID_TYPES_NORMALIZED = {
@@ -61,6 +66,8 @@ class ImportRow:
     encoding: str = "UTF-8"  # "UTF-8" / "SJIS"（QR のみ）
     status: RowStatus = RowStatus.OK
     error_msg: str = ""
+    folder: str = ""         # 取り込み先の階層名（空はルート）
+    new_folder: bool = False  # 取り込み時に作成される階層か
 
 
 class ParseError(Exception):
@@ -87,6 +94,13 @@ def format_encoding_for_display(row: "ImportRow") -> str:
     return row.encoding if row.code_type == "Q" else "—"
 
 
+def format_folder_for_display(row: "ImportRow") -> str:
+    """Treeview表示用の取り込み先。ルートは「（ルート）」、取り込み時に作成する階層は「（新規）」を付ける。"""
+    if not row.folder:
+        return "（ルート）"
+    return f"{row.folder}（新規）" if row.new_folder else row.folder
+
+
 # ---------------------------------------------------------------------------
 # テンプレート生成
 # ---------------------------------------------------------------------------
@@ -101,6 +115,16 @@ def generate_template() -> str:
 # ---------------------------------------------------------------------------
 
 _REQUIRED_HEADERS = ["text", "type", "description", "error_correction"]
+_OPTIONAL_COLUMNS = ("encoding", "folder")
+
+
+def _optional_column_indices(header: list[str]) -> dict[str, int]:
+    """5 列目以降のヘッダーから、省略可の列（encoding / folder）の位置を列名で求める。同名は先頭を優先する。"""
+    indices: dict[str, int] = {}
+    for i, name in enumerate(header[4:], start=4):
+        if name in _OPTIONAL_COLUMNS and name not in indices:
+            indices[name] = i
+    return indices
 
 
 def parse_csv(path: Path) -> list[ImportRow]:
@@ -109,7 +133,7 @@ def parse_csv(path: Path) -> list[ImportRow]:
 
     - BOM 付き UTF-8 対応（Excel の既定保存形式）
     - ヘッダー行必須（なければ ParseError）
-    - 5 列目 encoding は省略可（省略時は "UTF-8"）
+    - encoding / folder 列は省略可（5 列目以降に列名で指定。省略時は "UTF-8" / ルート）
     - 空行はスキップ
     - 列数不足・不正値の行は ERROR ステータスで返す（中断しない）
     - 列数が多い行は余分な列を無視する
@@ -133,10 +157,10 @@ def parse_csv(path: Path) -> list[ImportRow]:
     if header[:4] != _REQUIRED_HEADERS:
         raise ParseError(
             f"ヘッダー行が不正です。\n"
-            f"期待: text,type,description,error_correction[,encoding]\n"
+            f"期待: text,type,description,error_correction[,encoding][,folder]\n"
             f"実際: {','.join(raw_header)}"
         )
-    has_encoding_col = len(header) >= 5 and header[4] == "encoding"
+    columns = _optional_column_indices(header)
 
     rows: list[ImportRow] = []
     for line_no, raw_row in enumerate(reader, start=2):
@@ -144,7 +168,7 @@ def parse_csv(path: Path) -> list[ImportRow]:
         if not any(cell.strip() for cell in raw_row):
             continue
 
-        row = _parse_row(line_no, raw_row, has_encoding_col=has_encoding_col)
+        row = _parse_row(line_no, raw_row, columns)
         rows.append(row)
 
     return rows
@@ -153,7 +177,7 @@ def parse_csv(path: Path) -> list[ImportRow]:
 def _parse_row(
     line_no: int,
     raw: list[str],
-    has_encoding_col: bool = False,
+    columns: dict[str, int] | None = None,
 ) -> ImportRow:
     """1行をパースして ImportRow を返す。不正な場合は ERROR ステータス。"""
     if len(raw) < 4:
@@ -196,10 +220,13 @@ def _parse_row(
     else:
         ec = raw_ec
 
-    # encoding 列の解析（5列目、省略可）
+    columns = columns or {}
+
+    # encoding 列の解析（省略可）
     encoding = "UTF-8"
-    if has_encoding_col and len(raw) >= 5:
-        raw_enc = raw[4].strip().upper()
+    enc_idx = columns.get("encoding")
+    if enc_idx is not None and len(raw) > enc_idx:
+        raw_enc = raw[enc_idx].strip().upper()
         if raw_enc:
             normalized_enc = _ENCODING_ALIASES.get(raw_enc)
             if normalized_enc is None:
@@ -207,13 +234,30 @@ def _parse_row(
                     line_no=line_no, text=text, code_type=normalized_type,
                     description=description, error_correction=ec,
                     status=RowStatus.ERROR,
-                    error_msg=f"不正なエンコード: '{raw[4].strip()}'（UTF-8 または SJIS を指定してください）",
+                    error_msg=f"不正なエンコード: '{raw[enc_idx].strip()}'（UTF-8 または SJIS を指定してください）",
                 )
             encoding = normalized_enc
+
+    # folder 列の解析（省略可。空欄はルート）
+    folder = ""
+    folder_idx = columns.get("folder")
+    if folder_idx is not None and len(raw) > folder_idx:
+        raw_folder = raw[folder_idx].strip()
+        if raw_folder:
+            try:
+                folder = validate_folder_name(raw_folder)
+            except ValueError as e:
+                return ImportRow(
+                    line_no=line_no, text=text, code_type=normalized_type,
+                    description=description, error_correction=ec, encoding=encoding,
+                    status=RowStatus.ERROR,
+                    error_msg=f"不正な階層名: '{raw_folder}'（{e}）",
+                )
 
     return ImportRow(
         line_no=line_no, text=text, code_type=normalized_type,
         description=description, error_correction=ec, encoding=encoding,
+        folder=folder,
     )
 
 
@@ -272,31 +316,73 @@ def _check_qr_capacity(
         return f"テキストが長すぎてQRコードに収まりません。（{len(data)} バイト）"
 
 
+def _resolve_row_folder(
+    row: ImportRow,
+    known: dict[str, str],
+    new_keys: set[str],
+    create_missing_folders: bool,
+) -> ImportRow:
+    """行の階層を既存の表記に揃え、存在しない階層は新規扱い（または ERROR）にする。
+
+    known は小文字名 → 表記。新規扱いにした階層は known に加え、後続の行が同じ表記を使うようにする。
+    """
+    if not row.folder:
+        return row
+    key = row.folder.lower()
+    canonical = known.get(key)
+    if canonical is None:
+        if not create_missing_folders:
+            return dataclasses.replace(
+                row, status=RowStatus.ERROR,
+                error_msg=f"階層「{row.folder}」が存在しません。"
+                          "（先に作成するか、「存在しない階層」を自動作成にしてください）",
+            )
+        known[key] = canonical = row.folder
+        new_keys.add(key)
+    return dataclasses.replace(row, folder=canonical, new_folder=key in new_keys)
+
+
 def validate_all(
     rows: list[ImportRow],
     existing_records: list[dict],
+    existing_folders: list[str] | None = None,
+    create_missing_folders: bool = True,
 ) -> list[ImportRow]:
     """
     全行をバリデーションする。
-    CSV 内の重複も検出する（先着優先）。
-    """
-    # 既存レコードのコピーを作り、CSV内の先行行を順次追加して重複チェック
-    working_records: list[dict] = list(existing_records)
-    result: list[ImportRow] = []
+    重複は、行ごとの取り込み先の階層内だけで判定する（既存レコードと、CSV 内の先行行の両方）。
+    CSV 内の重複は先着優先。
 
+    - existing_folders: 既存の階層名。省略時は既存レコードが属する階層から求める。
+    - create_missing_folders: False のとき、存在しない階層を指す行は ERROR にする。
+    """
+    if existing_folders is None:
+        names = {record_folder(r) for r in existing_records} - {""}
+    else:
+        names = set(existing_folders)
+    known = {n.lower(): n for n in names}
+    new_keys: set[str] = set()
+
+    # 階層ごとの既存レコード。OK な行は追加して後続行の重複チェックに使う
+    by_folder: dict[str, list[dict]] = {}
+    for r in existing_records:
+        by_folder.setdefault(record_folder(r).lower(), []).append(r)
+
+    result: list[ImportRow] = []
     for row in rows:
-        validated = validate_row(row, working_records)
+        if row.status != RowStatus.ERROR:
+            row = _resolve_row_folder(row, known, new_keys, create_missing_folders)
+        validated = validate_row(row, by_folder.get(row.folder.lower(), []))
         result.append(validated)
-        # OK な行だけ working_records に追加して後続行の重複チェックに使う
         if validated.status == RowStatus.OK:
             rec: dict = {
                 "text": validated.text,
                 "type": validated.code_type,
-                "path": "",
+                "path": build_record_path(validated.folder, "pending.png"),
             }
             if validated.code_type == "Q":
                 rec["error_correction"] = validated.error_correction
                 rec["encoding"] = validated.encoding
-            working_records.append(rec)
+            by_folder.setdefault(validated.folder.lower(), []).append(rec)
 
     return result

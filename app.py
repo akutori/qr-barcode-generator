@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tkinter as tk
 import tomllib
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -44,6 +45,7 @@ from csv_import import (
     RowStatus,
     format_ec_for_display,
     format_encoding_for_display,
+    format_folder_for_display,
     format_text_for_display,
     generate_template,
     parse_csv,
@@ -91,20 +93,24 @@ SETTINGS_FILE = SAVE_DIR / "settings.json"
 _TYPE_DISP: dict[str, str] = {"Q": "QR", "B": "Barcode"}
 
 
-def _filter_overwrite(
-    records: list[dict],
+def _overwrite_predicate(
     text: str,
     code_type: str,
     ec: str | None,
     encoding: str | None = None,
-) -> list[dict]:
-    """上書きモード時に対象レコードを除去した新しいリストを返す。
+    folder: str | None = None,
+) -> Callable[[dict], bool]:
+    """上書きモードで置き換え対象になるレコードかを判定する関数を返す。
 
-    QR の場合: ec と encoding が一致するレコード、および ec フィールドなしの旧レコードを除去する。
+    QR の場合: ec と encoding が一致するレコード、および ec フィールドなしの旧レコードが対象。
     encoding=None のとき encoding チェックはスキップ（既存動作と互換）。
+    folder が None でなければ、その階層（空文字はルート）のレコードだけを対象にする。
+    大量のレコードを行ごとに走査するため、安価な比較（テキスト・種別）を先に行う。
     """
     def _matches(r: dict) -> bool:
         if r["text"] != text or r["type"] != code_type:
+            return False
+        if folder is not None and not same_folder_name(record_folder(r), folder):
             return False
         if code_type != "Q":
             return True
@@ -116,7 +122,20 @@ def _filter_overwrite(
                 return False
         return True
 
-    return [r for r in records if not _matches(r)]
+    return _matches
+
+
+def _filter_overwrite(
+    records: list[dict],
+    text: str,
+    code_type: str,
+    ec: str | None,
+    encoding: str | None = None,
+    folder: str | None = None,
+) -> list[dict]:
+    """上書きモード時に対象レコードを除去した新しいリストを返す。"""
+    matches = _overwrite_predicate(text, code_type, ec, encoding, folder)
+    return [r for r in records if not matches(r)]
 
 
 def _description_for_copy(rec: dict) -> str | None:
@@ -300,13 +319,15 @@ class App:
             return
         dlg = tk.Toplevel(self.root)
         dlg.title("CSVインポート")
-        dlg.geometry("720x500")
+        dlg.geometry("840x520")
         dlg.minsize(600, 400)
         dlg.resizable(True, True)
         self._import_dlg = dlg
 
-        _rows: list[ImportRow] = []
+        _parsed: list[ImportRow] = []   # CSV を読み込んだ直後の行（階層・重複の検証前）
+        _rows: list[ImportRow] = []     # 検証済みの行
         _dup_mode = tk.StringVar(value="skip")
+        _folder_mode = tk.StringVar(value="create")  # 存在しない階層: create=自動作成 / error=エラー
 
         # ── ボタン行（上部）──────────────────────────────────────────────────
         top_f = tk.Frame(dlg)
@@ -348,9 +369,27 @@ class App:
             except ParseError as e:
                 messagebox.showerror("CSVエラー", str(e), parent=dlg)
                 return
-            validated = validate_all(parsed, self.records)
-            _rows.clear()
-            _rows.extend(validated)
+            _parsed[:] = parsed
+            if not parsed:
+                # ヘッダーだけの CSV を選び直したときに、前のファイルのプレビューを残さない
+                _rows.clear()
+                _refresh_preview()
+                return
+            _revalidate(force=True)
+
+        def _revalidate(force: bool = False) -> None:
+            """階層・重複の検証をやり直す（ファイル読み込み時・「存在しない階層」の切り替え時・取り込み直前）。"""
+            if not _parsed:
+                return
+            # folder 列のない CSV は「存在しない階層」の設定で結果が変わらないため、切り替え時の再検証を省く
+            if not force and not any(r.folder for r in _parsed):
+                return
+            # レコードだけが参照していてディレクトリが無い階層は、取り込み時に保存先として使えないため既存扱いにしない
+            folders = [f for f in list_folders(SAVE_DIR, self.records) if (SAVE_DIR / f).is_dir()]
+            _rows[:] = validate_all(
+                _parsed, self.records, folders,
+                create_missing_folders=_folder_mode.get() == "create",
+            )
             _refresh_preview()
 
         tk.Button(top_f, text="CSVファイルを選択...", font=(_FONT, 9),
@@ -376,6 +415,16 @@ class App:
         tk.Radiobutton(dup_f, text="そのまま追加", variable=_dup_mode,
                        value="add", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
 
+        # ── 存在しない階層のオプション ─────────────────────────────────────────
+        folder_f = tk.Frame(dlg)
+        folder_f.pack(side="bottom", fill="x", padx=8, pady=(2, 0))
+        tk.Label(folder_f, text="存在しない階層:", font=(_FONT, 9)).pack(side="left")
+        tk.Radiobutton(folder_f, text="自動作成", variable=_folder_mode,
+                       value="create", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
+        tk.Radiobutton(folder_f, text="エラーにする", variable=_folder_mode,
+                       value="error", font=(_FONT, 9)).pack(side="left", padx=(4, 0))
+        _folder_mode.trace_add("write", lambda *_: _revalidate())
+
         # ── サマリーラベル ───────────────────────────────────────────────────
         summary_var = tk.StringVar(value="CSVファイルを選択してください。")
         tk.Label(dlg, textvariable=summary_var, font=(_FONT, 9),
@@ -385,11 +434,12 @@ class App:
         hint_f = tk.Frame(dlg)
         hint_f.pack(fill="x", padx=8, pady=(0, 2))
         tk.Label(hint_f,
-                 text="種別: QR（または Q）/ Barcode（または B）  ｜  誤り訂正: L / M / Q / H（空欄=M）  ｜  エンコード: UTF-8 / SJIS（省略=UTF-8）",
-                 font=(_FONT, 8), fg="#666666", anchor="w").pack(fill="x")
+                 text="種別: QR（または Q）/ Barcode（または B）  ｜  誤り訂正: L / M / Q / H（空欄=M）  ｜  エンコード: UTF-8 / SJIS（省略=UTF-8）\n"
+                      "folder: 取り込み先の階層名（省略・空欄=ルート。1 階層まで）",
+                 font=(_FONT, 8), fg="#666666", anchor="w", justify="left").pack(fill="x")
 
         # ── プレビュー（Treeview）────────────────────────────────────────────
-        cols = ("status", "type", "text", "description", "ec", "encoding", "error")
+        cols = ("status", "type", "folder", "text", "description", "ec", "encoding", "error")
         tree_f = tk.Frame(dlg)
         tree_f.pack(fill="both", expand=True, padx=8, pady=4)
 
@@ -404,6 +454,7 @@ class App:
 
         tree.heading("status",   text="状態")
         tree.heading("type",     text="種別")
+        tree.heading("folder",   text="階層")
         tree.heading("text",     text="テキスト")
         tree.heading("description", text="説明")
         tree.heading("ec",       text="誤り訂正")
@@ -411,6 +462,7 @@ class App:
         tree.heading("error",    text="エラー詳細")
         tree.column("status",   width=50,  stretch=False, anchor="center")
         tree.column("type",     width=70,  stretch=False, anchor="center")
+        tree.column("folder",   width=140, stretch=False)
         tree.column("text",     width=220, stretch=False)
         tree.column("description", width=110, stretch=False)
         tree.column("ec",       width=60,  stretch=False, anchor="center")
@@ -435,66 +487,138 @@ class App:
                 text_disp = format_text_for_display(r.text)
                 tree.insert("", "end", tags=(tag,), values=(
                     icon, _TYPE_DISP.get(r.code_type, r.code_type),
+                    format_folder_for_display(r),
                     text_disp, r.description,
                     format_ec_for_display(r), format_encoding_for_display(r),
                     r.error_msg,
                 ))
             total = len(_rows)
+            new_folders = {r.folder.lower() for r in _rows if r.new_folder and r.status != RowStatus.ERROR}
+            folder_note = f"  📁 新規階層 {len(new_folders)}件" if new_folders else ""
             summary_var.set(
-                f"全{total}件：✅ {n_ok}件  ⚠ {n_dup}件  ❌ {n_err}件"
+                f"全{total}件：✅ {n_ok}件  ⚠ {n_dup}件  ❌ {n_err}件{folder_note}"
                 if total else "データがありません。"
             )
             import_btn.config(state="normal" if total > 0 else "disabled")
 
         def _do_import() -> None:
+            # このダイアログは開いたまま本体を操作できるため、取り込み直前の状態で検証し直す
+            _revalidate(force=True)
             mode = _dup_mode.get()
+            create_folders = _folder_mode.get() == "create"
             n_ok = n_dup = n_err = 0
-            ts_base = datetime.now().strftime("%Y%m%d_%H%M%S")
+            ts_base = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            original = list(self.records)
+            overwritten: list[dict] = []
+            created_files: set[Path] = set()
+            used_folders: set[str] = set()
+            created_folders: set[str] = set()
             for i, row in enumerate(_rows):
                 if row.status == RowStatus.ERROR:
                     n_err += 1
                     continue
+                match: Callable[[dict], bool] | None = None
+                replaced: list[dict] = []
                 if row.status == RowStatus.DUPLICATE:
                     if mode == "skip":
                         n_dup += 1
                         continue
                     elif mode == "overwrite":
-                        # 既存レコードを削除してから追加
+                        # 取り込み先の階層内の既存レコードを置き換える。新しいコードを作れてから反映する
                         ec = row.error_correction if row.code_type == "Q" else None
                         enc = row.encoding if row.code_type == "Q" else None
-                        self.records = _filter_overwrite(
-                            self.records, row.text, row.code_type, ec, encoding=enc
+                        match = _overwrite_predicate(
+                            row.text, row.code_type, ec, encoding=enc, folder=row.folder
                         )
+                        replaced = [r for r in self.records if match(r)]
                     # mode == "add": 何もしない → そのまま追加処理へ
                 ts = f"{ts_base}_{i:04d}"
+                created_dir: Path | None = None
                 try:
+                    dest_dir = resolve_folder_dir(SAVE_DIR, row.folder)
+                    if row.folder and not dest_dir.is_dir():
+                        if not create_folders:
+                            raise FileNotFoundError(row.folder)
+                        dest_dir.mkdir()
+                        created_dir = dest_dir
                     if row.code_type == "Q":
-                        fp = SAVE_DIR / f"qr_{ts}.png"
+                        fp = dest_dir / f"qr_{ts}.png"
                         generate_qr(row.text, fp, error_correction=row.error_correction,
                                     encoding=row.encoding)
                         rec: dict = {
                             "text": row.text, "type": row.code_type,
-                            "path": fp.name, "error_correction": row.error_correction,
+                            "path": build_record_path(row.folder, fp.name),
+                            "error_correction": row.error_correction,
                             "encoding": row.encoding,
                         }
                     else:
-                        fp = generate_barcode_file(row.text, SAVE_DIR / f"bar_{ts}")
-                        rec = {"text": row.text, "type": row.code_type, "path": fp.name}
+                        fp = generate_barcode_file(row.text, dest_dir / f"bar_{ts}")
+                        rec = {"text": row.text, "type": row.code_type,
+                               "path": build_record_path(row.folder, fp.name)}
                     if row.description:
                         rec["description"] = row.description
+                    if match is not None:
+                        self.records = [r for r in self.records if not match(r)]
+                        overwritten.extend(replaced)
                     self.records.append(rec)
+                    created_files.add(fp)
+                    if created_dir is not None:
+                        created_folders.add(row.folder)
+                    if row.folder:
+                        used_folders.add(row.folder)
                     n_ok += 1
                 except Exception:
+                    if created_dir is not None:
+                        try:
+                            created_dir.rmdir()  # 失敗した行のために作った空の階層は残さない
+                        except OSError:
+                            pass
                     n_err += 1
 
-            save_metadata(self.records, METADATA_FILE)
+            try:
+                save_metadata(self.records, METADATA_FILE)
+            except Exception as e:
+                # 保存できなかったときは、メモリ・画像・作成した階層を取り込み前に戻す
+                self.records = original
+                for fp in created_files:
+                    try:
+                        fp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                for folder in created_folders:
+                    try:
+                        (SAVE_DIR / folder).rmdir()
+                    except OSError:
+                        pass
+                self._filter_records()
+                messagebox.showerror(
+                    "エラー", f"メタデータの保存に失敗したため、取り込みを取り消しました:\n{e}", parent=dlg,
+                )
+                return
+            # 取り消せない削除は、メタデータの保存が済んでから行う。
+            # 取り込み後のレコードが使っている画像は消さない（旧画像と新画像が同じ名前になった場合を含む）。
+            # 同じ取り込みの中で先に作って後の行に置き換えられた画像は、どのレコードも使わないため消す
+            in_use = {
+                path for r in self.records
+                if (path := record_file_path(SAVE_DIR, r)) is not None
+            }
+            for old in overwritten:
+                old_path = record_file_path(SAVE_DIR, old)
+                if old_path is not None and old_path not in in_use:
+                    try:
+                        old_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            for folder in sorted(used_folders):
+                self._remember_open(folder, True)  # 取り込んだコードが折りたたまれた階層に隠れないようにする
             self._filter_records()
             dlg.destroy()
             dup_label = {"skip": "重複スキップ", "overwrite": "重複上書き",
                          "add": "重複追加"}[mode]
+            folder_line = f"\n新規階層: {len(created_folders)}件" if created_folders else ""
             messagebox.showinfo(
                 "インポート完了",
-                f"成功: {n_ok}件\n{dup_label}: {n_dup}件\nエラー: {n_err}件",
+                f"成功: {n_ok}件\n{dup_label}: {n_dup}件\nエラー: {n_err}件{folder_line}",
                 parent=self.root,
             )
 

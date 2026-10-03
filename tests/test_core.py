@@ -631,7 +631,9 @@ class TestValidateFolderName:
         with pytest.raises(ValueError):
             validate_folder_name(name)
 
-    @pytest.mark.parametrize("name", ["CON", "nul", "Com1", "LPT9", "con.txt", "AUX", "COM¹", "lpt²"])
+    @pytest.mark.parametrize("name", [
+        "CON", "nul", "Com1", "LPT9", "con.txt", "AUX", "COM¹", "lpt²", "CONIN$", "conout$",
+    ])
     def test_Windows予約デバイス名はエラー(self, name):
         with pytest.raises(ValueError):
             validate_folder_name(name)

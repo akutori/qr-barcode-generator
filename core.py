@@ -2,6 +2,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path, PureWindowsPath
 
 
@@ -295,7 +296,7 @@ def apply_custom_order(records: list[dict], ordered_indices: list[int]) -> None:
 _MAX_FOLDER_NAME_LEN = _MAX_FILENAME_LEN
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 _RESERVED_DEVICE_NAMES = frozenset(
-    {"CON", "PRN", "AUX", "NUL"}
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
     | {f"COM{i}" for i in [*range(1, 10), "¹", "²", "³"]}
     | {f"LPT{i}" for i in [*range(1, 10), "¹", "²", "³"]}
 )
@@ -441,7 +442,9 @@ def record_file_path(
         return None
 
 
+@lru_cache(maxsize=2048)
 def _is_valid_folder_name(name: str) -> bool:
+    # record_folder が全レコードに対して呼ぶため、同じ名前の検証結果は使い回す
     try:
         return validate_folder_name(name) == name
     except ValueError:

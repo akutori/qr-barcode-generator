@@ -11,6 +11,7 @@ from csv_import import (
     RowStatus,
     format_ec_for_display,
     format_encoding_for_display,
+    format_folder_for_display,
     format_text_for_display,
     generate_template,
     parse_csv,
@@ -48,7 +49,7 @@ class TestGenerateTemplate:
     def test_ヘッダー行を含む(self):
         t = generate_template()
         lines = t.splitlines()
-        assert lines[0] == "text,type,description,error_correction,encoding"
+        assert lines[0] == "text,type,description,error_correction,encoding,folder"
 
     def test_サンプルデータを2行含む(self):
         t = generate_template()
@@ -500,3 +501,174 @@ class TestValidateRowEncoding:
                         description="", error_correction="M", encoding="SJIS")
         result = validate_row(row, [])
         assert result.status == RowStatus.OK
+
+
+# ---------------------------------------------------------------------------
+# 階層（folder 列）
+# ---------------------------------------------------------------------------
+
+class TestTemplateFolder:
+    def test_テンプレートをそのまま読み込める(self, tmp_path):
+        p = _write_csv(tmp_path, generate_template())
+        rows = parse_csv(p)
+        assert len(rows) == 2
+        assert all(r.status == RowStatus.OK for r in rows)
+
+    def test_テンプレートの1行目は階層を指定している(self, tmp_path):
+        rows = parse_csv(_write_csv(tmp_path, generate_template()))
+        assert rows[0].folder != ""
+        assert rows[1].folder == ""
+
+
+class TestParseCsvFolder:
+    HEADER6 = "text,type,description,error_correction,encoding,folder\n"
+
+    def test_4列CSVの階層は空でルート扱い(self, tmp_path):
+        rows = parse_csv(_write_csv(tmp_path, VALID_HEADER + VALID_ROW_QR))
+        assert rows[0].folder == ""
+        assert rows[0].new_folder is False
+
+    def test_5列CSVの階層は空でルート扱い(self, tmp_path):
+        p = _write_csv(tmp_path, VALID_HEADER.rstrip() + ",encoding\nhello,QR,,M,UTF-8\n")
+        assert parse_csv(p)[0].folder == ""
+
+    def test_6列目のfolder列を読み込める(self, tmp_path):
+        p = _write_csv(tmp_path, self.HEADER6 + "hello,QR,,M,UTF-8,商品\n")
+        rows = parse_csv(p)
+        assert rows[0].folder == "商品"
+        assert rows[0].status == RowStatus.OK
+
+    def test_folder列は列名で読むためencodingなしでも読める(self, tmp_path):
+        p = _write_csv(tmp_path, VALID_HEADER.rstrip() + ",folder\nhello,QR,,M,商品\n")
+        rows = parse_csv(p)
+        assert rows[0].folder == "商品"
+        assert rows[0].encoding == "UTF-8"
+
+    def test_folderとencodingの列順が逆でも読める(self, tmp_path):
+        p = _write_csv(tmp_path, VALID_HEADER.rstrip() + ",folder,encoding\n日本語,QR,,M,商品,SJIS\n")
+        rows = parse_csv(p)
+        assert (rows[0].folder, rows[0].encoding) == ("商品", "SJIS")
+
+    def test_前後の空白は除去する(self, tmp_path):
+        p = _write_csv(tmp_path, self.HEADER6 + "hello,QR,,M,UTF-8,  商品  \n")
+        assert parse_csv(p)[0].folder == "商品"
+
+    def test_空欄はルート(self, tmp_path):
+        p = _write_csv(tmp_path, self.HEADER6 + "hello,QR,,M,UTF-8,\n")
+        assert parse_csv(p)[0].folder == ""
+
+    def test_folder列のセルがない行はルート(self, tmp_path):
+        p = _write_csv(tmp_path, self.HEADER6 + "hello,QR,,M\n")
+        rows = parse_csv(p)
+        assert rows[0].status == RowStatus.OK
+        assert rows[0].folder == ""
+
+    @pytest.mark.parametrize("name", ["..", "a/b", "a\\b", "CON", "x:y", "あ" * 51, "abc."])
+    def test_不正な階層名はERRORで階層を含むメッセージ(self, tmp_path, name):
+        p = _write_csv(tmp_path, self.HEADER6 + f"hello,QR,,M,UTF-8,{name}\n")
+        row = parse_csv(p)[0]
+        assert row.status == RowStatus.ERROR
+        assert "階層" in row.error_msg
+
+    def test_encoding列の読み取りは変わらない(self, tmp_path):
+        p = _write_csv(tmp_path, self.HEADER6 + "日本語,QR,,M,SJIS,商品\n")
+        assert parse_csv(p)[0].encoding == "SJIS"
+
+
+class TestValidateAllFolders:
+    @staticmethod
+    def _row(text="hello", folder="", code_type="Q", **kw):
+        return ImportRow(line_no=2, text=text, code_type=code_type, description="",
+                         error_correction="M", folder=folder, **kw)
+
+    @staticmethod
+    def _rec(text, path, code_type="Q"):
+        rec = {"text": text, "type": code_type, "path": path}
+        if code_type == "Q":
+            rec["error_correction"] = "M"
+        return rec
+
+    def test_別の階層に同じコードがあっても重複にしない(self):
+        existing = [self._rec("hello", "A/x.png")]
+        result = validate_all([self._row(folder="B")], existing, ["A", "B"])
+        assert result[0].status == RowStatus.OK
+
+    def test_ルートの行は階層内の同じコードと重複にしない(self):
+        existing = [self._rec("hello", "A/x.png")]
+        result = validate_all([self._row(folder="")], existing, ["A"])
+        assert result[0].status == RowStatus.OK
+
+    def test_同じ階層の既存レコードとは重複(self):
+        existing = [self._rec("hello", "A/x.png")]
+        result = validate_all([self._row(folder="A")], existing, ["A"])
+        assert result[0].status == RowStatus.DUPLICATE
+
+    def test_ルートの行はルートの既存レコードと重複(self):
+        existing = [self._rec("hello", "x.png")]
+        result = validate_all([self._row(folder="")], existing, [])
+        assert result[0].status == RowStatus.DUPLICATE
+
+    def test_CSV内の重複は同じ階層の2行目以降だけ(self):
+        rows = [self._row(folder="A"), self._row(folder="A"), self._row(folder="B")]
+        result = validate_all(rows, [], ["A", "B"])
+        assert [r.status for r in result] == [RowStatus.OK, RowStatus.DUPLICATE, RowStatus.OK]
+
+    def test_存在しない階層は自動作成モードでOKかつ新規階層(self):
+        result = validate_all([self._row(folder="New")], [], [])
+        assert result[0].status == RowStatus.OK
+        assert result[0].new_folder is True
+
+    def test_存在しない階層はエラーモードでERROR(self):
+        result = validate_all([self._row(folder="New")], [], [], create_missing_folders=False)
+        assert result[0].status == RowStatus.ERROR
+        assert "存在しません" in result[0].error_msg
+
+    def test_存在する階層は新規扱いにしない(self):
+        for create in (True, False):
+            result = validate_all([self._row(folder="A")], [], ["A"], create_missing_folders=create)
+            assert result[0].status == RowStatus.OK
+            assert result[0].new_folder is False
+
+    def test_大文字小文字違いは既存の階層名に揃える(self):
+        result = validate_all([self._row(folder="foo")], [], ["Foo"], create_missing_folders=False)
+        assert result[0].folder == "Foo"
+        assert result[0].status == RowStatus.OK
+
+    def test_新規階層を複数行が参照すると全行が新規扱いで表記は先勝ち(self):
+        rows = [self._row("a", folder="New"), self._row("b", folder="new")]
+        result = validate_all(rows, [], [])
+        assert [r.folder for r in result] == ["New", "New"]
+        assert all(r.new_folder for r in result)
+
+    def test_階層一覧を省略すると既存レコードの階層から導出する(self):
+        existing = [self._rec("x", "A/x.png")]
+        result = validate_all([self._row("y", folder="a")], existing, None, create_missing_folders=False)
+        assert result[0].status == RowStatus.OK
+        assert result[0].folder == "A"
+
+    def test_ERROR行は階層の解決をせずそのまま返す(self):
+        row = self._row(folder="New", status=RowStatus.ERROR)
+        row.error_msg = "事前エラー"
+        result = validate_all([row], [], [], create_missing_folders=False)
+        assert result[0].error_msg == "事前エラー"
+
+    def test_エラーモードで存在しない階層の行は後続の重複判定に影響しない(self):
+        rows = [self._row("same", folder="New"), self._row("same", folder="")]
+        result = validate_all(rows, [], [], create_missing_folders=False)
+        assert [r.status for r in result] == [RowStatus.ERROR, RowStatus.OK]
+
+
+class TestFormatFolderForDisplay:
+    def test_ルートは括弧付きの表記(self):
+        row = ImportRow(line_no=2, text="a", code_type="Q", description="", error_correction="M")
+        assert format_folder_for_display(row) == "（ルート）"
+
+    def test_既存の階層は名前のみ(self):
+        row = ImportRow(line_no=2, text="a", code_type="Q", description="",
+                        error_correction="M", folder="商品")
+        assert format_folder_for_display(row) == "商品"
+
+    def test_新規階層は新規と付ける(self):
+        row = ImportRow(line_no=2, text="a", code_type="Q", description="",
+                        error_correction="M", folder="商品", new_folder=True)
+        assert format_folder_for_display(row) == "商品（新規）"

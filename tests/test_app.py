@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import app as app_module
-from app import _app_dir, _description_for_copy, _filter_overwrite, _read_version
+from app import _app_dir, _description_for_copy, _filter_overwrite, _overwrite_predicate, _read_version
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +120,47 @@ class TestFilterOverwrite:
         records = [{"text": "hello", "type": "Q", "path": "...",
                     "error_correction": "M", "encoding": "SJIS"}]
         assert _filter_overwrite(records, "hello", "Q", "M", encoding="SJIS") == []
+
+
+class TestFilterOverwriteFolder:
+    @staticmethod
+    def _recs():
+        return [
+            {"text": "hello", "type": "Q", "path": "root.png", "error_correction": "M"},
+            {"text": "hello", "type": "Q", "path": "A/a.png", "error_correction": "M"},
+            {"text": "hello", "type": "Q", "path": "B/b.png", "error_correction": "M"},
+        ]
+
+    def test_階層を指定すると同じ階層のレコードだけ除去する(self):
+        result = _filter_overwrite(self._recs(), "hello", "Q", "M", folder="A")
+        assert [r["path"] for r in result] == ["root.png", "B/b.png"]
+
+    def test_空文字を指定するとルートのレコードだけ除去する(self):
+        result = _filter_overwrite(self._recs(), "hello", "Q", "M", folder="")
+        assert [r["path"] for r in result] == ["A/a.png", "B/b.png"]
+
+    def test_階層名の大文字小文字は区別しない(self):
+        result = _filter_overwrite(self._recs(), "hello", "Q", "M", folder="a")
+        assert [r["path"] for r in result] == ["root.png", "B/b.png"]
+
+    def test_階層を指定しないときは従来どおり全階層が対象(self):
+        assert _filter_overwrite(self._recs(), "hello", "Q", "M") == []
+
+
+class TestOverwritePredicate:
+    def test_一致するレコードだけTrueを返す(self):
+        match = _overwrite_predicate("hello", "Q", "M", "UTF-8", "A")
+        assert match({"text": "hello", "type": "Q", "path": "A/a.png", "error_correction": "M"}) is True
+        assert match({"text": "hello", "type": "Q", "path": "B/a.png", "error_correction": "M"}) is False
+        assert match({"text": "world", "type": "Q", "path": "A/a.png", "error_correction": "M"}) is False
+
+    def test_階層の判定より先にテキストで絞り込む(self):
+        """大量レコードでの上書き取り込みが遅くならないよう、安価な比較を先に行う。"""
+        class Boom(dict):
+            def get(self, *a, **k):
+                raise AssertionError("path を参照してはいけない")
+        match = _overwrite_predicate("hello", "Q", "M", "UTF-8", "A")
+        assert match(Boom(text="other", type="Q")) is False
 
 
 # ---------------------------------------------------------------------------
