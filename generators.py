@@ -7,6 +7,8 @@ import segno
 from PIL import Image, ImageDraw, ImageFont
 from barcode.writer import ImageWriter
 
+from core import record_file_path
+
 _EC_MAP = {"L": "l", "M": "m", "Q": "q", "H": "h"}
 
 # 誤り訂正レベルごとの最大容量（英数字 / バイナリ）
@@ -125,6 +127,7 @@ def generate_pdf_grid(records: list[dict], output_path: Path, save_dir: Path, co
 
     font = _load_font(24)
     pages: list[Image.Image] = []
+    folder_ok: dict[str, bool] = {}
 
     for page_start in range(0, len(records), per_page):
         page_recs = records[page_start: page_start + per_page]
@@ -137,14 +140,17 @@ def generate_pdf_grid(records: list[dict], output_path: Path, save_dir: Path, co
             x = MARGIN + col * (cell_w + GAP)
             y = MARGIN + row * (CELL_H + GAP)
 
-            try:
-                img = Image.open(Path(save_dir) / rec["path"]).convert("RGB")
-                img.thumbnail((cell_w, CELL_IMG_H), Image.LANCZOS)
-                ix = x + (cell_w - img.width) // 2
-                iy = y + (CELL_IMG_H - img.height) // 2
-                canvas.paste(img, (ix, iy))
-            except Exception:
-                pass
+            # metadata.json の path は save_dir の外を指しうるため、検証済みのパスだけ開く
+            img_path = record_file_path(save_dir, rec, folder_ok)
+            if img_path is not None:
+                try:
+                    img = Image.open(img_path).convert("RGB")
+                    img.thumbnail((cell_w, CELL_IMG_H), Image.LANCZOS)
+                    ix = x + (cell_w - img.width) // 2
+                    iy = y + (CELL_IMG_H - img.height) // 2
+                    canvas.paste(img, (ix, iy))
+                except Exception:
+                    pass
 
             label_src = rec.get("description") or rec["text"].split("\n")[0]
             label = _truncate_label(label_src)
