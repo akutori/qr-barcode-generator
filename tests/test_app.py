@@ -5,7 +5,15 @@ from pathlib import Path
 import pytest
 
 import app as app_module
-from app import _app_dir, _description_for_copy, _filter_overwrite, _overwrite_predicate, _read_version
+from app import (
+    _app_dir,
+    _description_for_copy,
+    _draw_folder_icon,
+    _filter_overwrite,
+    _overwrite_predicate,
+    _read_version,
+    _strip_indicator,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +169,61 @@ class TestOverwritePredicate:
                 raise AssertionError("path を参照してはいけない")
         match = _overwrite_predicate("hello", "Q", "M", "UTF-8", "A")
         assert match(Boom(text="other", type="Q")) is False
+
+
+def _flatten_names(layout):
+    names = []
+    for name, opts in layout:
+        names.append(name)
+        names.extend(_flatten_names(opts.get("children", [])))
+    return names
+
+
+class TestStripIndicator:
+    LAYOUT = [("Treeitem.padding", {"sticky": "nswe", "children": [
+        ("Treeitem.indicator", {"side": "left", "sticky": ""}),
+        ("Treeitem.image", {"side": "left", "sticky": ""}),
+        ("Treeitem.focus", {"side": "left", "sticky": "", "children": [
+            ("Treeitem.text", {"side": "left", "sticky": ""}),
+        ]}),
+    ]})]
+
+    def test_インジケータ要素を取り除く(self):
+        names = _flatten_names(_strip_indicator(self.LAYOUT))
+        assert "Treeitem.indicator" not in names
+
+    def test_ほかの要素は残る(self):
+        names = _flatten_names(_strip_indicator(self.LAYOUT))
+        assert names == ["Treeitem.padding", "Treeitem.image", "Treeitem.focus", "Treeitem.text"]
+
+    def test_元のレイアウトは変更しない(self):
+        _strip_indicator(self.LAYOUT)
+        assert "Treeitem.indicator" in _flatten_names(self.LAYOUT)
+
+    def test_インジケータがなければそのまま(self):
+        layout = [("Treeitem.text", {"side": "left"})]
+        assert _strip_indicator(layout) == layout
+
+
+class TestDrawFolderIcon:
+    @pytest.mark.parametrize("kind", ["closed", "open", "empty"])
+    def test_背景は透明で図形部分は不透明な画像を返す(self, kind):
+        img = _draw_folder_icon(kind)
+        assert img.mode == "RGBA"
+        assert img.getpixel((0, 0))[3] == 0
+        assert img.getchannel("A").getextrema()[1] > 0
+
+    def test_種類ごとに異なる絵になる(self):
+        images = [_draw_folder_icon(k).tobytes() for k in ("closed", "open", "empty")]
+        assert len(set(images)) == 3
+
+    def test_scaleで大きさが変わる(self):
+        assert _draw_folder_icon("closed", 2).size == (2 * _draw_folder_icon("closed").size[0],
+                                                       2 * _draw_folder_icon("closed").size[1])
+
+    def test_不明な種類はValueError(self):
+        with pytest.raises(ValueError):
+            _draw_folder_icon("bogus")
 
 
 # ---------------------------------------------------------------------------

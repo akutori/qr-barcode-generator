@@ -716,3 +716,276 @@ def move_records(
             except OSError:
                 pass
     return MoveResult(len(plan), len(removed))
+
+
+# ---------------------------------------------------------------------------
+# 階層の名前変更・削除
+# ---------------------------------------------------------------------------
+
+class FolderNotEmptyError(Exception):
+    """中身のある階層を、中身の扱いを指定せずに削除しようとしたときに送出する。"""
+
+    def __init__(self, count: int) -> None:
+        super().__init__(f"階層に {count} 件のコードがあります。")
+        self.count = count
+
+
+class UnmanagedFilesError(Exception):
+    """階層に一覧へ表示されないファイル・フォルダがあり、削除を中止するときに送出する。"""
+
+    def __init__(self, names: list[str]) -> None:
+        super().__init__("階層に一覧へ表示されないファイルまたはフォルダがあります。")
+        self.names = names
+
+
+@dataclass(frozen=True)
+class DeleteFolderResult:
+    moved: int
+    deleted: int
+
+
+def _canonical_folder(save_dir: Path, name: str, records: list[dict]) -> str:
+    """既存の階層（大文字小文字は同一視）の表記を返す。存在しなければ ValueError。"""
+    for existing in list_folders(save_dir, records):
+        if same_folder_name(existing, name):
+            return existing
+    raise ValueError("指定した階層が存在しません。")
+
+
+def _filename_of(rec: dict) -> str:
+    return str(rec.get("path", "")).replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def rename_folder(
+    save_dir: Path,
+    old: str,
+    new: str,
+    records: list[dict],
+    metadata_path: Path,
+) -> int:
+    """階層 old を new に改名し、その階層のレコードの path を更新して保存する。更新したレコード数を返す。
+
+    - 新しい名前は validate_folder_name で検証する。大文字小文字だけの変更は許可する。
+    - 別の階層と同名（大文字小文字違いを含む）なら FolderExistsError、同名のファイルがあれば ValueError。
+    - ディレクトリが無くレコードだけが参照する階層は、path だけを更新する。
+    - 保存に失敗したときは、フォルダ名と path を元に戻す。戻せなかったときは、レコードを実際の
+      フォルダ名に合わせたうえで OSError にする。
+    """
+    save_dir = Path(save_dir)
+    old_name = _canonical_folder(save_dir, old, records)
+    new_name = validate_folder_name(new)
+    if new_name == old_name:
+        return 0
+    case_only = same_folder_name(new_name, old_name)
+    new_dir = save_dir / new_name
+    if not case_only:
+        if any(same_folder_name(new_name, f) for f in list_folders(save_dir, records)):
+            raise FolderExistsError(new_name)
+        if new_dir.exists():
+            raise ValueError("同名のファイルまたはフォルダが存在するため変更できません。")
+    old_dir = resolve_folder_dir(save_dir, old_name)
+
+    renamed = old_dir.is_dir()
+    if renamed:
+        os.rename(old_dir, new_dir)
+
+    targets = [r for r in records if same_folder_name(record_folder(r), old_name)]
+    originals = [(r, r["path"]) for r in targets]
+    for r in targets:
+        r["path"] = build_record_path(new_name, _filename_of(r))
+    try:
+        save_metadata(records, metadata_path)
+    except BaseException as exc:
+        for r, old_path in originals:
+            r["path"] = old_path
+        if renamed:
+            try:
+                os.rename(new_dir, old_dir)
+            except OSError:
+                # 戻せなかったので、レコードを実際のフォルダ名に合わせる
+                for r in targets:
+                    r["path"] = build_record_path(new_name, _filename_of(r))
+                try:
+                    save_metadata(records, metadata_path)
+                except OSError:
+                    pass
+                if isinstance(exc, Exception):
+                    raise OSError(
+                        f"階層名の変更に失敗し、元の名前へ戻せませんでした。現在のフォルダ名は「{new_name}」です。"
+                    ) from exc
+        raise
+    return len(targets)
+
+
+def folder_unmanaged_entries(save_dir: Path, folder: str, records: list[dict]) -> list[str]:
+    """階層の中にある、レコードが指していないファイル・フォルダの名前を返す（階層を削除してよいかの判定に使う）。"""
+    target = resolve_folder_dir(save_dir, folder)
+    if not target.is_dir():
+        return []
+    managed = {
+        _filename_of(r).lower() for r in records if same_folder_name(record_folder(r), folder)
+    }
+    with os.scandir(target) as it:
+        return sorted(e.name for e in it if e.name.lower() not in managed)
+
+
+def delete_records(
+    records: list[dict],
+    indices: list[int],
+    save_dir: Path,
+    metadata_path: Path,
+) -> int:
+    """records[indices] を削除し、削除した件数を返す。records は呼び出し元のリストを直接更新する。
+
+    取り消せない画像ファイルの削除は、メタデータの保存に成功した後に行う（失敗したら何も消えない）。
+    path が不正なレコードはレコードだけを消し、save_dir の外のファイルには触れない。
+    """
+    unique = sorted(set(indices))
+    if any(not 0 <= i < len(records) for i in unique):
+        raise ValueError("削除対象が不正です。")
+    removed = [records[i] for i in unique]
+    removed_ids = {id(r) for r in removed}
+    kept = [r for r in records if id(r) not in removed_ids]
+    save_metadata(kept, metadata_path)
+    records[:] = kept
+
+    folder_ok: dict[str, bool] = {}
+    in_use = {
+        path for r in kept if (path := record_file_path(save_dir, r, folder_ok)) is not None
+    }
+    for rec in removed:
+        path = record_file_path(save_dir, rec, folder_ok)
+        if path is not None and path not in in_use:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return len(removed)
+
+
+def _check_folder_removable(
+    save_dir: Path, name: str, records: list[dict]
+) -> tuple[Path, list[int]]:
+    """階層を取り除いてよいか検査し、(ディレクトリ, 中のレコードの位置) を返す。何も変更しない。
+
+    リンクになっている階層、一覧に表示されないファイル・フォルダがある階層、
+    パスが不正または画像ファイルではないものを指すコードがある階層は拒否する。
+    """
+    target = resolve_folder_dir(save_dir, name)
+    if target.exists() and os.path.normcase(str(target.resolve())) != os.path.normcase(
+        str(save_dir.resolve() / target.name)
+    ):
+        raise ValueError("リンクになっている階層は削除できません。")
+    unmanaged = folder_unmanaged_entries(save_dir, name, records)
+    if unmanaged:
+        raise UnmanagedFilesError(unmanaged)
+
+    indices = [i for i, r in enumerate(records) if same_folder_name(record_folder(r), name)]
+    folder_ok: dict[str, bool] = {}
+    for i in indices:
+        path = record_file_path(save_dir, records[i], folder_ok)
+        if path is None:
+            raise ValueError("パスが不正なコードがあるため、階層を削除できません。")
+        if path.exists() and not path.is_file():
+            raise ValueError("画像ファイルではないものがあるため、階層を削除できません。")
+    return target, indices
+
+
+def delete_folder(
+    save_dir: Path,
+    folder: str,
+    records: list[dict],
+    metadata_path: Path,
+    contents: str = "error",
+    overwrite: bool = False,
+) -> DeleteFolderResult:
+    """階層を削除する。中身（レコード）の扱いは contents で指定する。
+
+    - "error": 中身があれば FolderNotEmptyError（何も変更しない）。
+    - "move_to_root": 中のコードをルートへ戻す（move_records と同じ。衝突時は MoveCollisionError）。
+    - "delete": 中のコードを画像ファイルごと削除する。
+    階層に一覧へ表示されないファイル・フォルダがあるときは、何も変更せず UnmanagedFilesError にする
+    （フォルダを再帰的に消すことはしない）。
+    """
+    if contents not in ("error", "move_to_root", "delete"):
+        raise ValueError("中身の扱いが不正です。")
+    save_dir = Path(save_dir)
+    name = _canonical_folder(save_dir, folder, records)
+    target, indices = _check_folder_removable(save_dir, name, records)
+    moved = deleted = 0
+    if indices:
+        if contents == "error":
+            raise FolderNotEmptyError(len(indices))
+        if contents == "move_to_root":
+            moved = move_records(records, indices, "", save_dir, metadata_path, overwrite=overwrite).moved
+        else:
+            deleted = delete_records(records, indices, save_dir, metadata_path)
+    if target.is_dir():
+        try:
+            target.rmdir()
+        except OSError as exc:
+            if moved or deleted:
+                raise OSError(
+                    f"コードの{'移動' if moved else '削除'}は完了しましたが、"
+                    f"階層フォルダを削除できませんでした: {exc}"
+                ) from exc
+            raise
+    return DeleteFolderResult(moved, deleted)
+
+
+@dataclass(frozen=True)
+class MergeFolderResult:
+    moved: int
+    overwritten: int
+    left: int  # 移動先に同じコードがあり、元の階層に残したコードの件数
+    removed_source: bool
+
+
+def merge_folder_collisions(
+    save_dir: Path, src: str, dest: str, records: list[dict]
+) -> list[tuple[int, int]]:
+    """src を dest へ統合するとき、dest に同じコードがある組を (src 側, dest 側) の位置で返す。"""
+    name = _canonical_folder(save_dir, src, records)
+    target = _canonical_folder(save_dir, dest, records)
+    indices = [i for i, r in enumerate(records) if same_folder_name(record_folder(r), name)]
+    return find_move_collisions(records, indices, target)
+
+
+def merge_folder(
+    save_dir: Path,
+    src: str,
+    dest: str,
+    records: list[dict],
+    metadata_path: Path,
+    overwrite: set[int] | None = None,
+) -> MergeFolderResult:
+    """階層 src の中身を、既にある階層 dest へ統合する（dest の既存のコードはそのまま残る）。
+
+    dest に同じコードがある src のコードは、位置が overwrite に含まれていれば dest 側を置き換え、
+    含まれていなければ移動せず src に残す（その場合 src は削除されない）。
+    src に一覧へ表示されないファイル・フォルダがあるときは何も変更せず UnmanagedFilesError。
+    """
+    save_dir = Path(save_dir)
+    name = _canonical_folder(save_dir, src, records)
+    target_name = _canonical_folder(save_dir, dest, records)
+    if same_folder_name(name, target_name):
+        raise ValueError("同じ階層には統合できません。")
+    target, indices = _check_folder_removable(save_dir, name, records)
+    overwrite = overwrite or set()
+    colliding = {s for s, _ in find_move_collisions(records, indices, target_name)}
+    chosen = colliding & overwrite
+    moving = [i for i in indices if i not in colliding or i in chosen]
+    left = len(indices) - len(moving)
+    result = MoveResult(0, 0)
+    if moving:
+        result = move_records(records, moving, target_name, save_dir, metadata_path, overwrite=bool(chosen))
+    removed = False
+    if left == 0 and target.is_dir():
+        try:
+            target.rmdir()
+            removed = True
+        except OSError as exc:
+            raise OSError(
+                f"コードの統合は完了しましたが、元の階層フォルダを削除できませんでした: {exc}"
+            ) from exc
+    return MergeFolderResult(result.moved, result.overwritten, left, removed)

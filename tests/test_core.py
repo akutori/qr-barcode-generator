@@ -11,15 +11,22 @@ import core
 from core import (
     SORT_OPTION_LABELS,
     FolderExistsError,
+    FolderNotEmptyError,
     MoveCollisionError,
+    UnmanagedFilesError,
     apply_custom_order,
     build_record_path,
     calc_preview_size,
     clamp_panel_width,
     create_folder,
+    delete_folder,
+    merge_folder,
+    merge_folder_collisions,
+    delete_records,
     find_duplicate_indices,
     find_index,
     find_move_collisions,
+    folder_unmanaged_entries,
     group_by_folder,
     has_duplicate,
     list_folders,
@@ -30,6 +37,7 @@ from core import (
     move_index,
     move_records,
     record_folder,
+    rename_folder,
     resolve_folder_dir,
     safe_record_path,
     same_folder_name,
@@ -1368,3 +1376,385 @@ class TestListLabelsWithStatusFolders:
         (tmp_path / "outside.png").write_bytes(b"x")
         records = [{"text": "hello", "type": "Q", "path": "../outside.png"}]
         assert list_labels_with_status(records, save_dir) == ["⚠[QR]  hello"]
+
+
+# ---------------------------------------------------------------------------
+# 階層の名前変更
+# ---------------------------------------------------------------------------
+
+class TestRenameFolder:
+    def test_フォルダ名とレコードのpathを変更して保存する(self, save_dir, meta):
+        records = [
+            _make_rec(save_dir, "A", "a1.png", "one"),
+            _make_rec(save_dir, "A", "a2.png", "two"),
+            _make_rec(save_dir, "B", "b1.png", "three"),
+            _make_rec(save_dir, "", "r1.png", "four"),
+        ]
+        n = rename_folder(save_dir, "A", "商品", records, meta)
+        assert n == 2
+        assert not (save_dir / "A").exists()
+        assert (save_dir / "商品" / "a1.png").exists() and (save_dir / "商品" / "a2.png").exists()
+        assert [r["path"] for r in records] == ["商品/a1.png", "商品/a2.png", "B/b1.png", "r1.png"]
+        assert [r["path"] for r in load_metadata(meta)] == ["商品/a1.png", "商品/a2.png", "B/b1.png", "r1.png"]
+
+    def test_前後の空白は除去した名前で変更する(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+        rename_folder(save_dir, "A", "  新  ", records, meta)
+        assert (save_dir / "新").is_dir()
+
+    def test_同じ名前のときは何もしない(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+        assert rename_folder(save_dir, "A", "A", records, meta) == 0
+        assert records[0]["path"] == "A/a1.png"
+
+    def test_大文字小文字だけの変更は許可する(self, save_dir, meta):
+        records = [_make_rec(save_dir, "Foo", "a1.png", "one")]
+        n = rename_folder(save_dir, "Foo", "FOO", records, meta)
+        assert n == 1
+        assert records[0]["path"] == "FOO/a1.png"
+        assert [p.name for p in save_dir.iterdir() if p.is_dir()] == ["FOO"]
+
+    def test_大文字小文字違いのold指定でも既存の階層を変更できる(self, save_dir, meta):
+        records = [_make_rec(save_dir, "Foo", "a1.png", "one")]
+        rename_folder(save_dir, "foo", "Bar", records, meta)
+        assert records[0]["path"] == "Bar/a1.png"
+
+    @pytest.mark.parametrize("new", ["", "..", "a/b", "CON", "x:y", "あ" * 51])
+    def test_不正な新しい名前はValueErrorで何も変更しない(self, save_dir, meta, new):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+        with pytest.raises(ValueError):
+            rename_folder(save_dir, "A", new, records, meta)
+        assert (save_dir / "A" / "a1.png").exists()
+        assert records[0]["path"] == "A/a1.png"
+
+    def test_ほかの階層と同名ならFolderExistsError(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "one"), _make_rec(save_dir, "B", "b1.png", "two")]
+        with pytest.raises(FolderExistsError):
+            rename_folder(save_dir, "A", "b", records, meta)
+        assert (save_dir / "A" / "a1.png").exists() and (save_dir / "B" / "b1.png").exists()
+        assert records[0]["path"] == "A/a1.png"
+
+    def test_同名のファイルがあるときはValueError(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+        (save_dir / "memo").write_text("x")
+        with pytest.raises(ValueError):
+            rename_folder(save_dir, "A", "memo", records, meta)
+        assert (save_dir / "A" / "a1.png").exists()
+
+    def test_存在しない階層はValueError(self, save_dir, meta):
+        with pytest.raises(ValueError):
+            rename_folder(save_dir, "None", "X", [], meta)
+
+    def test_ディレクトリが無くレコードだけが参照する階層はpathだけ更新する(self, save_dir, meta):
+        records = [{"text": "x", "type": "Q", "path": "Ghost/x.png", "error_correction": "M"}]
+        n = rename_folder(save_dir, "Ghost", "Real", records, meta)
+        assert n == 1
+        assert records[0]["path"] == "Real/x.png"
+        assert not (save_dir / "Real").exists()
+
+    def test_メタデータ保存に失敗したらフォルダ名とpathを元に戻す(self, save_dir, meta, monkeypatch):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+
+        def failing_save(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(core, "save_metadata", failing_save)
+        with pytest.raises(OSError):
+            rename_folder(save_dir, "A", "B", records, meta)
+        assert (save_dir / "A" / "a1.png").exists() and not (save_dir / "B").exists()
+        assert records[0]["path"] == "A/a1.png"
+
+    def test_戻せなかったときは実際の場所にレコードを合わせてエラーにする(self, save_dir, meta, monkeypatch):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+        real_rename = os.rename
+        calls = []
+
+        def flaky_rename(src, dst):
+            calls.append(src)
+            if len(calls) >= 2:  # 変更後の巻き戻しが失敗する
+                raise PermissionError("locked")
+            return real_rename(src, dst)
+
+        def failing_save(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(os, "rename", flaky_rename)
+        monkeypatch.setattr(core, "save_metadata", failing_save)
+        with pytest.raises(OSError, match="戻せませんでした"):
+            rename_folder(save_dir, "A", "B", records, meta)
+        monkeypatch.undo()
+        assert (save_dir / "B" / "a1.png").exists()
+        assert records[0]["path"] == "B/a1.png"
+
+    def test_フォルダ名の変更に失敗したらレコードは変更しない(self, save_dir, meta, monkeypatch):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+
+        def failing_rename(src, dst):
+            raise PermissionError("locked")
+
+        monkeypatch.setattr(os, "rename", failing_rename)
+        with pytest.raises(PermissionError):
+            rename_folder(save_dir, "A", "B", records, meta)
+        monkeypatch.undo()
+        assert records[0]["path"] == "A/a1.png"
+        assert (save_dir / "A" / "a1.png").exists()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="シンボリックリンク作成権限が必要")
+    def test_save_dir外を指す階層はValueError(self, save_dir, meta, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (save_dir / "L").symlink_to(outside, target_is_directory=True)
+        records = [{"text": "x", "type": "Q", "path": "L/x.png", "error_correction": "M"}]
+        with pytest.raises(ValueError):
+            rename_folder(save_dir, "L", "M", records, meta)
+        assert outside.exists()
+
+
+# ---------------------------------------------------------------------------
+# 階層の削除
+# ---------------------------------------------------------------------------
+
+class TestFolderUnmanagedEntries:
+    def test_レコードが指すファイルだけなら空(self, save_dir):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+        assert folder_unmanaged_entries(save_dir, "A", records) == []
+
+    def test_レコードにないファイルとフォルダを返す(self, save_dir):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+        (save_dir / "A" / "memo.txt").write_text("x")
+        (save_dir / "A" / "sub").mkdir()
+        assert folder_unmanaged_entries(save_dir, "A", records) == ["memo.txt", "sub"]
+
+    def test_ディレクトリが無ければ空(self, save_dir):
+        assert folder_unmanaged_entries(save_dir, "Ghost", []) == []
+
+    def test_ファイル名の大文字小文字違いは同じファイルとして扱う(self, save_dir):
+        """Windows は大文字小文字を区別しないため、レコードの path と綴りが違っても管理下のファイルとみなす。"""
+        (save_dir / "A").mkdir()
+        (save_dir / "A" / "PHOTO.PNG").write_bytes(b"x")
+        records = [{"text": "x", "type": "Q", "path": "A/photo.png", "error_correction": "M"}]
+        assert folder_unmanaged_entries(save_dir, "A", records) == []
+
+
+class TestDeleteRecords:
+    def test_レコードと画像ファイルを削除する(self, save_dir, meta):
+        records = [_make_rec(save_dir, "", "a.png", "a"), _make_rec(save_dir, "", "b.png", "b"),
+                   _make_rec(save_dir, "", "c.png", "c")]
+        n = delete_records(records, [0, 2], save_dir, meta)
+        assert n == 2
+        assert [r["text"] for r in records] == ["b"]
+        assert not (save_dir / "a.png").exists() and not (save_dir / "c.png").exists()
+        assert (save_dir / "b.png").exists()
+        assert [r["text"] for r in load_metadata(meta)] == ["b"]
+
+    def test_メタデータ保存に失敗したら何も削除しない(self, save_dir, meta, monkeypatch):
+        records = [_make_rec(save_dir, "", "a.png", "a")]
+
+        def failing_save(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(core, "save_metadata", failing_save)
+        with pytest.raises(OSError):
+            delete_records(records, [0], save_dir, meta)
+        assert len(records) == 1 and (save_dir / "a.png").exists()
+
+    def test_pathが不正なレコードはレコードだけ消してsave_dir外のファイルは消さない(self, save_dir, meta, tmp_path):
+        victim = tmp_path / "victim.png"
+        victim.write_bytes(b"keep")
+        records = [{"text": "x", "type": "Q", "path": "../victim.png", "error_correction": "M"}]
+        assert delete_records(records, [0], save_dir, meta) == 1
+        assert victim.exists() and records == []
+
+    def test_残るレコードが使っている画像は消さない(self, save_dir, meta):
+        records = [_make_rec(save_dir, "", "a.png", "a"),
+                   {"text": "b", "type": "Q", "path": "a.png", "error_correction": "M"}]
+        delete_records(records, [0], save_dir, meta)
+        assert (save_dir / "a.png").exists()
+
+    def test_範囲外のindexはValueError(self, save_dir, meta):
+        with pytest.raises(ValueError):
+            delete_records([], [0], save_dir, meta)
+
+
+class TestDeleteFolder:
+    def test_空の階層を削除する(self, save_dir, meta):
+        (save_dir / "A").mkdir()
+        result = delete_folder(save_dir, "A", [], meta)
+        assert (result.moved, result.deleted) == (0, 0)
+        assert not (save_dir / "A").exists()
+
+    def test_中身があるのに扱いを指定しないとFolderNotEmptyErrorで何も変更しない(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+        with pytest.raises(FolderNotEmptyError):
+            delete_folder(save_dir, "A", records, meta)
+        assert (save_dir / "A" / "a1.png").exists() and records[0]["path"] == "A/a1.png"
+
+    def test_ルートへ戻して階層を削除する(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "one"), _make_rec(save_dir, "A", "a2.png", "two"),
+                   _make_rec(save_dir, "B", "b1.png", "three")]
+        result = delete_folder(save_dir, "A", records, meta, contents="move_to_root")
+        assert (result.moved, result.deleted) == (2, 0)
+        assert [r["path"] for r in records] == ["a1.png", "a2.png", "B/b1.png"]
+        assert (save_dir / "a1.png").exists() and (save_dir / "a2.png").exists()
+        assert not (save_dir / "A").exists()
+        assert [r["path"] for r in load_metadata(meta)] == ["a1.png", "a2.png", "B/b1.png"]
+
+    def test_ルートに同一コードがあり上書き未指定ならMoveCollisionErrorで何も変更しない(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "same"), _make_rec(save_dir, "", "r1.png", "same")]
+        with pytest.raises(MoveCollisionError):
+            delete_folder(save_dir, "A", records, meta, contents="move_to_root")
+        assert (save_dir / "A" / "a1.png").exists() and len(records) == 2
+
+    def test_上書き指定ならルートの同一コードを置き換えて階層を削除する(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "same"), _make_rec(save_dir, "", "r1.png", "same")]
+        result = delete_folder(save_dir, "A", records, meta, contents="move_to_root", overwrite=True)
+        assert result.moved == 1
+        assert [r["path"] for r in records] == ["a1.png"]
+        assert not (save_dir / "r1.png").exists() and not (save_dir / "A").exists()
+
+    def test_コードごと削除する(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "one"), _make_rec(save_dir, "B", "b1.png", "two")]
+        result = delete_folder(save_dir, "A", records, meta, contents="delete")
+        assert (result.moved, result.deleted) == (0, 1)
+        assert [r["text"] for r in records] == ["two"]
+        assert not (save_dir / "A").exists() and (save_dir / "B" / "b1.png").exists()
+        assert [r["text"] for r in load_metadata(meta)] == ["two"]
+
+    def test_管理外のファイルがあるときはUnmanagedFilesErrorで何も変更しない(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+        (save_dir / "A" / "memo.txt").write_text("x")
+        for contents in ("error", "move_to_root", "delete"):
+            with pytest.raises(UnmanagedFilesError) as exc:
+                delete_folder(save_dir, "A", records, meta, contents=contents)
+            assert exc.value.names == ["memo.txt"]
+        assert (save_dir / "A" / "a1.png").exists() and (save_dir / "A" / "memo.txt").exists()
+        assert records[0]["path"] == "A/a1.png"
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlink 作成に権限が要る")
+    def test_別階層へのリンクになっている階層は何も消さず拒否する(self, save_dir, meta):
+        records = [_make_rec(save_dir, "B", "x.png", "bee")]
+        os.symlink(save_dir / "B", save_dir / "A", target_is_directory=True)
+        records.append({"text": "ay", "type": "Q", "path": "A/x.png", "error_correction": "M"})
+        with pytest.raises(ValueError):
+            delete_folder(save_dir, "A", records, meta, contents="delete")
+        assert (save_dir / "B" / "x.png").exists() and len(records) == 2
+
+    def test_パスが不正なコードがある階層は何も変更せず拒否する(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "one"),
+                   {"text": "bad", "type": "Q", "path": "A/CON", "error_correction": "M"}]
+        with pytest.raises(ValueError):
+            delete_folder(save_dir, "A", records, meta, contents="delete")
+        assert len(records) == 2 and (save_dir / "A" / "a1.png").exists()
+
+    def test_コードの指す名前がディレクトリなら何も変更せず拒否する(self, save_dir, meta):
+        (save_dir / "A" / "x.png").mkdir(parents=True)
+        (save_dir / "A" / "x.png" / "keep.txt").write_text("k")
+        records = [{"text": "x", "type": "Q", "path": "A/x.png", "error_correction": "M"}]
+        with pytest.raises(ValueError):
+            delete_folder(save_dir, "A", records, meta, contents="delete")
+        assert len(records) == 1
+
+    def test_rmdirに失敗したらコード処理済みと分かるメッセージにする(self, save_dir, meta, monkeypatch):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+
+        def failing_rmdir(self):
+            raise PermissionError("locked")
+
+        monkeypatch.setattr(Path, "rmdir", failing_rmdir)
+        with pytest.raises(OSError, match="削除は完了しました"):
+            delete_folder(save_dir, "A", records, meta, contents="delete")
+
+    def test_ディレクトリが無くレコードだけが参照する階層もコードごと削除できる(self, save_dir, meta):
+        records = [{"text": "x", "type": "Q", "path": "Ghost/x.png", "error_correction": "M"}]
+        result = delete_folder(save_dir, "Ghost", records, meta, contents="delete")
+        assert result.deleted == 1 and records == []
+
+    def test_コードごと削除でメタデータ保存に失敗したら何も消さない(self, save_dir, meta, monkeypatch):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+
+        def failing_save(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(core, "save_metadata", failing_save)
+        with pytest.raises(OSError):
+            delete_folder(save_dir, "A", records, meta, contents="delete")
+        assert (save_dir / "A" / "a1.png").exists() and len(records) == 1
+
+    def test_存在しない階層はValueError(self, save_dir, meta):
+        with pytest.raises(ValueError):
+            delete_folder(save_dir, "None", [], meta)
+
+    def test_不正な中身の扱いはValueError(self, save_dir, meta):
+        (save_dir / "A").mkdir()
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+        with pytest.raises(ValueError):
+            delete_folder(save_dir, "A", records, meta, contents="bogus")
+        assert (save_dir / "A" / "a1.png").exists()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="シンボリックリンク作成権限が必要")
+    def test_save_dir外を指す階層はValueErrorで外側を触らない(self, save_dir, meta, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "keep.txt").write_text("x")
+        (save_dir / "L").symlink_to(outside, target_is_directory=True)
+        with pytest.raises(ValueError):
+            delete_folder(save_dir, "L", [], meta)
+        assert (outside / "keep.txt").exists()
+
+
+class TestMergeFolder:
+    def test_重複がなければ全て移動し元の階層を削除する(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "one"), _make_rec(save_dir, "B", "b1.png", "two")]
+        result = merge_folder(save_dir, "A", "B", records, meta)
+        assert (result.moved, result.overwritten, result.left, result.removed_source) == (1, 0, 0, True)
+        assert not (save_dir / "A").exists()
+        assert {r["text"]: r["path"].split("/")[0] for r in records} == {"one": "B", "two": "B"}
+        assert (save_dir / "B" / "b1.png").exists()
+
+    def test_重複は既定で動かさず元の階層に残す(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "same", content=b"new"),
+                   _make_rec(save_dir, "A", "a2.png", "only"),
+                   _make_rec(save_dir, "B", "b1.png", "same", content=b"old")]
+        assert merge_folder_collisions(save_dir, "A", "B", records) == [(0, 2)]
+        result = merge_folder(save_dir, "A", "B", records, meta)
+        assert (result.moved, result.overwritten, result.left, result.removed_source) == (1, 0, 1, False)
+        assert (save_dir / "B" / "b1.png").read_bytes() == b"old"
+        assert (save_dir / "A" / "a1.png").read_bytes() == b"new"
+        assert records[0]["path"] == "A/a1.png" and records[1]["path"].startswith("B/")
+
+    def test_重複ごとに上書きを選べる(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "s1", content=b"new1"),
+                   _make_rec(save_dir, "A", "a2.png", "s2", content=b"new2"),
+                   _make_rec(save_dir, "B", "b1.png", "s1", content=b"old1"),
+                   _make_rec(save_dir, "B", "b2.png", "s2", content=b"old2")]
+        result = merge_folder(save_dir, "A", "B", records, meta, overwrite={0})
+        assert (result.moved, result.overwritten, result.left) == (1, 1, 1)
+        texts = sorted((r["text"], r["path"].split("/")[0]) for r in records)
+        assert texts == [("s1", "B"), ("s2", "A"), ("s2", "B")]
+        assert not any(p.read_bytes() == b"old1" for p in (save_dir / "B").iterdir())
+        assert (save_dir / "A" / "a2.png").exists()
+
+    def test_全て上書きすると元の階層も消える(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "s1"), _make_rec(save_dir, "B", "b1.png", "s1")]
+        result = merge_folder(save_dir, "A", "B", records, meta, overwrite={0})
+        assert result.removed_source and not (save_dir / "A").exists() and len(records) == 1
+        assert [r["text"] for r in load_metadata(meta)] == ["s1"]
+
+    def test_管理外のファイルがあれば何も変更しない(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+        (save_dir / "B").mkdir()
+        (save_dir / "A" / "memo.txt").write_text("x")
+        with pytest.raises(UnmanagedFilesError):
+            merge_folder(save_dir, "A", "B", records, meta)
+        assert records[0]["path"] == "A/a1.png"
+
+    def test_同じ階層への統合はValueError(self, save_dir, meta):
+        records = [_make_rec(save_dir, "A", "a1.png", "one")]
+        with pytest.raises(ValueError):
+            merge_folder(save_dir, "A", "a", records, meta)
+
+    def test_空の階層も統合して削除できる(self, save_dir, meta):
+        (save_dir / "A").mkdir()
+        (save_dir / "B").mkdir()
+        result = merge_folder(save_dir, "A", "B", [], meta)
+        assert result.removed_source and not (save_dir / "A").exists()

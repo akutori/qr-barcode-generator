@@ -10,17 +10,21 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
 from core import (
     SORT_OPTION_LABELS,
     FolderExistsError,
+    FolderNotEmptyError,
     MoveCollisionError,
+    UnmanagedFilesError,
     apply_custom_order,
     build_record_path,
     clamp_panel_width,
     create_folder,
+    delete_folder,
     find_move_collisions,
+    folder_unmanaged_entries,
     group_by_folder,
     has_duplicate,
     list_folders,
@@ -31,6 +35,9 @@ from core import (
     move_records,
     record_file_path,
     record_folder,
+    merge_folder,
+    merge_folder_collisions,
+    rename_folder,
     resolve_folder_dir,
     same_folder_name,
     save_metadata,
@@ -38,6 +45,7 @@ from core import (
     sort_records,
     suggested_filename,
     type_label,
+    validate_folder_name,
 )
 from csv_import import (
     ImportRow,
@@ -136,6 +144,44 @@ def _filter_overwrite(
     """上書きモード時に対象レコードを除去した新しいリストを返す。"""
     matches = _overwrite_predicate(text, code_type, ec, encoding, folder)
     return [r for r in records if not matches(r)]
+
+
+def _strip_indicator(layout: list) -> list:
+    """ttk のレイアウトから、標準の開閉マーク（インジケータ）の要素を取り除いた新しいレイアウトを返す。
+
+    標準の開閉マークは、子を持たないルート直下の行にも空きを確保する。ルートのコードが右にずれて
+    階層内のコードに見えるのを防ぐため、開閉マークは階層行だけに自前で表示する。
+    """
+    result = []
+    for name, opts in layout:
+        if name.endswith("indicator"):
+            continue
+        opts = dict(opts)
+        if "children" in opts:
+            opts["children"] = _strip_indicator(opts["children"])
+        result.append((name, opts))
+    return result
+
+
+_FOLDER_ICON_SIZE = 14
+_FOLDER_ICON_KINDS = ("closed", "open", "empty")
+
+
+def _draw_folder_icon(kind: str, scale: int = 1) -> Image.Image:
+    """階層行の先頭に出す開閉マークを描く。closed=▶ / open=▼ / empty=中身がない階層の点。"""
+    if kind not in _FOLDER_ICON_KINDS:
+        raise ValueError(f"不明なアイコン種別: {kind}")
+    size = _FOLDER_ICON_SIZE * scale
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    dark, light = (60, 60, 60, 255), (150, 150, 150, 255)
+    if kind == "closed":
+        draw.polygon([(4 * scale, 2 * scale), (4 * scale, 11 * scale), (10 * scale, 6.5 * scale)], fill=dark)
+    elif kind == "open":
+        draw.polygon([(2 * scale, 4 * scale), (11 * scale, 4 * scale), (6.5 * scale, 10 * scale)], fill=dark)
+    else:
+        draw.ellipse([4 * scale, 4 * scale, 9 * scale, 9 * scale], fill=light)
+    return img
 
 
 def _description_for_copy(rec: dict) -> str | None:
@@ -246,8 +292,8 @@ class App:
         self._tree_recs: list[dict] = []               # 直近のツリー構築時のレコード（iid の r{n} は n 番目）
         self._open_names: dict[str, str] = {f.lower(): f for f in self.settings["open_folders"]}  # 展開中の階層（小文字名 → 表示名）
         self._context_rec_idx: int | None = None
-        self._press: tuple[str, str, int] | None = None  # (iid, クリックされた要素名, 修飾キー)
-        self._suppress_toggle: bool = False
+        self._folder_icons: dict[str, ImageTk.PhotoImage] = {}  # 階層行の開閉マーク（GC 防止を兼ねる）
+        self._context_folder: str | None = None                 # 右クリックされた階層名
         self._drag_iid: str | None = None
         self._drag_moved: bool = False
         self._dragging: bool = False
@@ -853,7 +899,13 @@ class App:
         sb = tk.Scrollbar(lb_f)
         sb.pack(side="right", fill="y")
         style = ttk.Style()
-        style.configure("Records.Treeview", font=("Consolas", 10), rowheight=20)
+        scale = max(1, round(self.root.winfo_fpixels("1i") / 96))
+        style.layout("Records.Treeview.Item", _strip_indicator(style.layout("Treeview.Item")))
+        style.configure("Records.Treeview", font=("Consolas", 10), rowheight=max(20, 16 * scale),
+                        indent=18 * scale)
+        self._folder_icons = {
+            kind: ImageTk.PhotoImage(_draw_folder_icon(kind, scale)) for kind in _FOLDER_ICON_KINDS
+        }
         self.tree = ttk.Treeview(lb_f, show="tree", selectmode="extended",
                                  style="Records.Treeview", yscrollcommand=sb.set)
         self.tree.column("#0", stretch=True, minwidth=150, width=250)
@@ -887,6 +939,10 @@ class App:
         self._context_menu.add_separator()
         self._move_menu = tk.Menu(self._context_menu, tearoff=0)
         self._context_menu.add_cascade(label="階層へ移動", menu=self._move_menu)
+
+        self._folder_menu = tk.Menu(self.root, tearoff=0)
+        self._folder_menu.add_command(label="名前を変更...", command=self.on_rename_folder)
+        self._folder_menu.add_command(label="削除...", command=self.on_delete_folder)
 
         rf = tk.Frame(self._paned)
         self._paned.add(rf, minsize=300)
@@ -1029,6 +1085,41 @@ class App:
         self.settings["open_folders"] = [n for k, n in self._open_names.items() if k in existing]
         save_settings(self.settings, SETTINGS_FILE)
 
+    def _persist_open_folders(self) -> None:
+        """展開状態を、実在する階層に絞って settings.json に保存する。"""
+        existing = {f.lower() for f in self._folders}
+        self.settings["open_folders"] = [n for k, n in self._open_names.items() if k in existing]
+        save_settings(self.settings, SETTINGS_FILE)
+
+    def _set_folder_icon(self, iid: str, opened: bool | None = None) -> None:
+        """階層行の開閉マークを状態に合わせて設定する。中身がない階層は点を表示する。"""
+        if opened is None:
+            opened = self._is_open(iid)
+        if not self.tree.get_children(iid):
+            kind = "empty"
+        else:
+            kind = "open" if opened else "closed"
+        self.tree.item(iid, image=self._folder_icons[kind])
+
+    def _toggle_folder(self, iid: str) -> None:
+        opened = not self._is_open(iid)
+        self.tree.item(iid, open=opened)
+        self._set_folder_icon(iid, opened)
+        if not self._is_searching():
+            self._remember_open(self._iid_folder[iid], opened)
+
+    def _click_folder(self, iid: str) -> str:
+        """階層行のクリック: その行を選択し、開閉を切り替える。
+
+        標準の処理（Press / DoubleClick）には渡さない。連続クリックがダブルクリックとして無視されて
+        開閉できなくなるのを防ぎ、クリック位置にかかわらず 1 回ごとに必ず切り替えるため。
+        """
+        self.tree.focus_set()
+        self.tree.selection_set(iid)
+        self.tree.focus(iid)
+        self._toggle_folder(iid)
+        return "break"
+
     def _populate_list(self) -> None:
         """self._folders / self._groups の内容でツリーを作り直す。選択とスクロール位置は維持する。"""
         tree = self.tree
@@ -1060,6 +1151,7 @@ class App:
                         open=searching or folder.lower() in self._open_names)
             for i in idxs:
                 tree.insert(fiid, "end", iid=f"r{i}", text=labels[i])
+            self._set_folder_icon(fiid, searching or folder.lower() in self._open_names)
         for i in self._groups.get("", []):
             tree.insert("", "end", iid=f"r{i}", text=labels[i])
 
@@ -1130,18 +1222,19 @@ class App:
 
     # ── イベントハンドラ ──────────────────────────────────────────────────
 
-    def _on_tree_press(self, event: tk.Event) -> None:
-        self._press = None
+    def _on_tree_press(self, event: tk.Event) -> str | None:
         self._drag_iid = None
         self._drag_moved = False
         self._dragging = False
         iid = self.tree.identify_row(event.y)
         if not iid:
-            return
+            return None
         modifiers = event.state & 0x0005  # Shift | Control
-        self._press = (iid, self.tree.identify_element(event.x, event.y), modifiers)
+        if iid in self._iid_folder and not modifiers:
+            return self._click_folder(iid)
         if self._rec_idx_of(iid) is not None and not modifiers and not self._is_searching():
             self._drag_iid = iid  # 検索中・修飾キー併用時はドラッグ並び替えを無効化
+        return None
 
     def _on_tree_drag_motion(self, event: tk.Event) -> None:
         if self._drag_iid is None:
@@ -1191,30 +1284,14 @@ class App:
             self.root.after_cancel(self._drag_scroll_after_id)
             self._drag_scroll_after_id = None
 
-    def _on_tree_release(self, event: tk.Event) -> None:
+    def _on_tree_release(self, _event: tk.Event) -> None:
         self._cancel_drag_autoscroll()
-        press, drag_iid, moved = self._press, self._drag_iid, self._drag_moved
-        suppress = self._suppress_toggle
-        self._press = None
+        drag_iid, moved = self._drag_iid, self._drag_moved
         self._drag_iid = None
         self._drag_moved = False
         self._dragging = False
-        self._suppress_toggle = False
-
         if moved and drag_iid is not None:
             self._finish_drag_reorder(drag_iid)
-            return
-        if press is None or suppress:
-            return
-        iid, element, modifiers = press
-        # 階層行のクリックで展開/折りたたみ。矢印は Treeview 標準の動作に任せる
-        if (iid in self._iid_folder and not modifiers
-                and not element.endswith("indicator")
-                and self.tree.identify_row(event.y) == iid):
-            opened = not self._is_open(iid)
-            self.tree.item(iid, open=opened)
-            if not self._is_searching():
-                self._remember_open(self._iid_folder[iid], opened)
 
     def _finish_drag_reorder(self, drag_iid: str) -> None:
         """ドラッグで並べ替えた階層内の順序をカスタム順として保存する。"""
@@ -1233,9 +1310,12 @@ class App:
             self._filter_records()  # 既にカスタム順選択中は trace が発火しないため手動で再描画
 
     def _on_tree_open_close(self, opened: bool) -> None:
-        """矢印クリック・キー操作による展開/折りたたみを記憶する。"""
+        """キー操作による展開/折りたたみを、開閉マークと展開状態に反映する。"""
         iid = self.tree.focus()
-        if iid in self._iid_folder and not self._is_searching():
+        if iid not in self._iid_folder:
+            return
+        self._set_folder_icon(iid, opened)
+        if not self._is_searching():
             self._remember_open(self._iid_folder[iid], opened)
 
     def _on_tree_hover(self, event: tk.Event) -> None:
@@ -1310,9 +1390,10 @@ class App:
     def _on_tree_double(self, event: tk.Event) -> str | None:
         iid = self.tree.identify_row(event.y)
         if iid in self._iid_folder:
-            # 1 回目のクリックで切り替え済みのため、標準の切り替えと 2 回目のクリックは無効化する
-            self._suppress_toggle = True
-            return "break"
+            if event.state & 0x5:  # Shift / Ctrl 併用は標準の選択操作に任せる
+                return None
+            # 連続クリックの 2 回目以降も、1 回目と同じく開閉を切り替える
+            return self._click_folder(iid)
         idx = self._rec_idx_of(iid)
         if idx is None:
             return None
@@ -1321,6 +1402,12 @@ class App:
 
     def _on_tree_right_click(self, event: tk.Event) -> None:
         iid = self.tree.identify_row(event.y)
+        if iid in self._iid_folder:
+            if iid not in self.tree.selection():
+                self.tree.selection_set(iid)
+            self._context_folder = self._iid_folder[iid]
+            self._folder_menu.tk_popup(event.x_root, event.y_root)
+            return
         idx = self._rec_idx_of(iid)
         if idx is None:
             return
@@ -1661,6 +1748,290 @@ class App:
             self._filter_records()
             self._select_folder(created)
             return
+
+    def _rename_open_state(self, old: str, new: str) -> None:
+        """階層の名前変更に合わせて、展開状態の記憶を引き継ぐ。"""
+        if old.lower() in self._open_names:
+            del self._open_names[old.lower()]
+            self._open_names[new.lower()] = new
+
+    def _refresh_after_folder_change(self) -> None:
+        """階層の名前変更・削除のあと、一覧と現在表示中のコードを更新する。"""
+        self._filter_records()
+        self._persist_open_folders()
+        current = self._current_rec
+        if current is not None and any(r is current for r in self.records):
+            self._show_record(current)  # パスが変わったため詳細表示を更新する
+        elif current is not None:
+            self._clear_preview()
+
+    def on_rename_folder(self) -> None:
+        old = self._context_folder
+        if not old:
+            return
+        initial = old
+        while True:
+            name = simpledialog.askstring(
+                "階層の名前を変更", f"「{old}」の新しい名前を入力してください:",
+                initialvalue=initial, parent=self.root,
+            )
+            if name is None:
+                return
+            try:
+                new = validate_folder_name(name)
+            except ValueError as e:
+                messagebox.showerror("階層の名前を変更", str(e), parent=self.root)
+                initial = name
+                continue
+            if new == old:
+                return
+            if not same_folder_name(new, old):
+                existing = next((f for f in self._folders if same_folder_name(new, f)), None)
+                if existing is not None:
+                    self._merge_folder_into(old, existing)
+                    return
+            break
+
+        count = sum(1 for r in self.records if same_folder_name(record_folder(r), old))
+        if not messagebox.askyesno(
+            "階層の名前を変更",
+            f"階層「{old}」の名前を「{new}」に変更しますか？\n\n"
+            f"この階層のコード {count} 件の保存場所（パス）も更新されます。",
+            default=messagebox.NO, parent=self.root,
+        ):
+            return
+        self._save_description()
+        try:
+            rename_folder(SAVE_DIR, old, new, self.records, METADATA_FILE)
+        except FolderExistsError:
+            messagebox.showinfo("階層の名前を変更", f"「{new}」は既に作成されています。", parent=self.root)
+            return
+        except (ValueError, OSError) as e:
+            messagebox.showerror("エラー", f"名前の変更に失敗しました:\n{e}", parent=self.root)
+            self._refresh_after_folder_change()
+            return
+        self._rename_open_state(old, new)
+        self._refresh_after_folder_change()
+        self._select_folder(new)
+
+    def _merge_folder_into(self, old: str, dest: str) -> None:
+        """名前の変更先が既存の階層だったとき、old の中身を dest へ統合する（dest の既存のコードは残す）。"""
+        if not messagebox.askyesno(
+            "階層の統合",
+            f"階層「{dest}」は既にあります。\n\n「{old}」の中身を「{dest}」へ統合しますか？\n"
+            f"「{dest}」にある既存のコードはそのまま残ります。\n"
+            "同じコードがある場合は、続けて 1 件ずつ扱いを選びます。",
+            default=messagebox.NO, parent=self.root,
+        ):
+            return
+        self._save_description()
+        overwrite: set[int] = set()
+        try:
+            collisions = merge_folder_collisions(SAVE_DIR, old, dest, self.records)
+            if collisions:
+                chosen = self._ask_merge_choices(collisions, old, dest)
+                if chosen is None:
+                    return
+                overwrite = chosen
+            result = merge_folder(SAVE_DIR, old, dest, self.records, METADATA_FILE, overwrite=overwrite)
+        except UnmanagedFilesError as e:
+            shown = "\n".join(e.names[:8])
+            messagebox.showerror(
+                "階層を統合できません",
+                f"階層「{old}」には、一覧に表示されないファイルまたはフォルダがあります。\n"
+                f"Explorer などで整理してから統合してください。\n\n{shown}",
+                parent=self.root,
+            )
+            return
+        except (ValueError, OSError) as e:
+            messagebox.showerror("エラー", f"階層の統合に失敗しました:\n{e}", parent=self.root)
+            self._refresh_after_folder_change()
+            return
+        if result.removed_source:
+            self._open_names.pop(old.lower(), None)
+        self._refresh_after_folder_change()
+        self._select_folder(dest)
+        if result.left:
+            messagebox.showinfo(
+                "階層の統合",
+                f"同じコードがあった {result.left} 件は、階層「{old}」に残しています。",
+                parent=self.root,
+            )
+
+    def _ask_merge_choices(
+        self, collisions: list[tuple[int, int]], src: str, dest: str
+    ) -> set[int] | None:
+        """統合先に同じコードがある組ごとに「上書き」か「残す」を選ぶ。上書きするコード側の位置の集合を返す（キャンセルは None）。"""
+        labels = list_labels(self.records)
+        chosen: set[int] = set()
+        bulk: str | None = None
+        for n, (s_idx, _d_idx) in enumerate(collisions, 1):
+            if bulk is None:
+                picked = self._ask_merge_one(labels[s_idx], src, dest, n, len(collisions))
+                if picked is None:
+                    return None
+                answer, apply_all = picked
+                if apply_all:
+                    bulk = answer
+            else:
+                answer = bulk
+            if answer == "overwrite":
+                chosen.add(s_idx)
+        return chosen
+
+    def _ask_merge_one(
+        self, label: str, src: str, dest: str, n: int, total: int
+    ) -> tuple[str, bool] | None:
+        """1 件分の選択。("overwrite" か "keep", 以降すべてに適用するか) を返す。キャンセルは None。"""
+        top = tk.Toplevel(self.root)
+        top.title(f"同じコードがあります ({n}/{total})")
+        top.resizable(False, False)
+        top.transient(self.root)
+        tk.Label(
+            top,
+            text=f"「{label}」は、階層「{dest}」にも同じ内容のコードがあります。",
+            font=(_FONT, 10), padx=16, pady=12, justify="left", wraplength=480,
+        ).pack()
+        tk.Label(
+            top,
+            text=f"「上書き」は「{dest}」の既存のコード（画像ファイルを含む）を削除して置き換え、元に戻せません。\n"
+                 f"「残す」は移動せず、階層「{src}」に残します。",
+            font=(_FONT, 9), fg="#a00000", padx=16, justify="left", wraplength=480,
+        ).pack()
+        result: list[tuple[str, bool] | None] = [None]
+        apply_all = tk.BooleanVar(value=False)
+
+        def choose(value: str | None) -> None:
+            result[0] = None if value is None else (value, apply_all.get())
+            top.destroy()
+
+        row1 = tk.Frame(top)
+        row1.pack(pady=(12, 4))
+        tk.Button(row1, text="上書き", font=(_FONT, 10), width=12,
+                  command=lambda: choose("overwrite")).pack(side="left", padx=6)
+        tk.Button(row1, text="残す", font=(_FONT, 10), width=12,
+                  command=lambda: choose("keep")).pack(side="left", padx=6)
+        if total > 1:
+            tk.Checkbutton(top, text="これ以降のすべての重複に適用する", variable=apply_all,
+                           font=(_FONT, 10)).pack(pady=4)
+        row3 = tk.Frame(top)
+        row3.pack(pady=(4, 12))
+        cancel_btn = tk.Button(row3, text="キャンセル（統合を中止）", font=(_FONT, 10), width=24,
+                               default="active", command=lambda: choose(None))
+        cancel_btn.pack()
+
+        def on_return(_: tk.Event) -> None:
+            focused = top.focus_get()
+            (focused if isinstance(focused, tk.Button) else cancel_btn).invoke()
+
+        top.bind("<Return>", on_return)
+        top.bind("<Escape>", lambda _: choose(None))
+        top.protocol("WM_DELETE_WINDOW", lambda: choose(None))
+        top.grab_set()
+        cancel_btn.focus_force()
+        self.root.wait_window(top)
+        return result[0]
+
+    def _ask_delete_folder_contents(self, folder: str, count: int) -> str | None:
+        """中身のある階層の削除方法を選ぶ。"move_to_root" / "delete" / None（キャンセル）を返す。"""
+        top = tk.Toplevel(self.root)
+        top.title("階層を削除")
+        top.resizable(False, False)
+        top.transient(self.root)
+        tk.Label(
+            top, text=f"階層「{folder}」には {count} 件のコードがあります。\nどのように削除しますか？",
+            font=(_FONT, 10), padx=16, pady=12, justify="left",
+        ).pack()
+        tk.Label(
+            top, text="「コードごと削除」は、画像ファイルも削除され、元に戻せません。",
+            font=(_FONT, 9), fg="#a00000", padx=16, justify="left",
+        ).pack()
+
+        result: list[str | None] = [None]
+
+        def choose(value: str | None) -> None:
+            result[0] = value
+            top.destroy()
+
+        btn_f = tk.Frame(top)
+        btn_f.pack(pady=12)
+        tk.Button(btn_f, text="ルートへ戻して階層を削除", font=(_FONT, 10),
+                  command=lambda: choose("move_to_root")).pack(side="left", padx=6)
+        tk.Button(btn_f, text="コードごと削除", font=(_FONT, 10),
+                  command=lambda: choose("delete")).pack(side="left", padx=6)
+        cancel_btn = tk.Button(btn_f, text="キャンセル", font=(_FONT, 10), width=10,
+                               default="active", command=lambda: choose(None))
+        cancel_btn.pack(side="left", padx=6)
+
+        def on_return(_: tk.Event) -> None:
+            focused = top.focus_get()
+            (focused if isinstance(focused, tk.Button) else cancel_btn).invoke()
+
+        top.bind("<Return>", on_return)
+        top.bind("<Escape>", lambda _: choose(None))
+        top.protocol("WM_DELETE_WINDOW", lambda: choose(None))
+        top.grab_set()
+        cancel_btn.focus_force()  # 初期フォーカスは「キャンセル」
+        self.root.wait_window(top)
+        return result[0]
+
+    def on_delete_folder(self) -> None:
+        folder = self._context_folder
+        if not folder:
+            return
+        self._save_description()
+        try:
+            unmanaged = folder_unmanaged_entries(SAVE_DIR, folder, self.records)
+        except ValueError as e:
+            messagebox.showerror("エラー", str(e), parent=self.root)
+            return
+        if unmanaged:
+            shown = "\n".join(unmanaged[:8])
+            if len(unmanaged) > 8:
+                shown += f"\n… 他 {len(unmanaged) - 8} 件"
+            messagebox.showerror(
+                "階層を削除できません",
+                f"階層「{folder}」には、一覧に表示されないファイルまたはフォルダがあります。\n"
+                f"中身を確認し、Explorer などで整理してから削除してください。\n\n{shown}",
+                parent=self.root,
+            )
+            return
+
+        indices = [i for i, r in enumerate(self.records) if same_folder_name(record_folder(r), folder)]
+        if not indices:
+            if not messagebox.askyesno(
+                "階層を削除", f"階層「{folder}」を削除しますか？\n（コードは入っていません）",
+                default=messagebox.NO, parent=self.root,
+            ):
+                return
+            contents = "error"
+        else:
+            contents = self._ask_delete_folder_contents(folder, len(indices))
+            if contents is None:
+                return
+        overwrite = False
+        if contents == "move_to_root":
+            collisions = find_move_collisions(self.records, indices, "")
+            if collisions:
+                if not self._ask_move_overwrite(collisions, ""):
+                    return
+                overwrite = True
+        deleted_ok = False
+        try:
+            delete_folder(SAVE_DIR, folder, self.records, METADATA_FILE,
+                          contents=contents, overwrite=overwrite)
+            deleted_ok = True
+        except MoveCollisionError:
+            messagebox.showerror("エラー", "移動先の内容が変更されたため中止しました。", parent=self.root)
+        except UnmanagedFilesError:
+            messagebox.showerror("エラー", "階層の内容が変更されたため中止しました。", parent=self.root)
+        except FolderNotEmptyError:
+            messagebox.showerror("エラー", "階層にコードが追加されたため中止しました。", parent=self.root)
+        except (ValueError, OSError) as e:
+            messagebox.showerror("エラー", f"階層の削除に失敗しました:\n{e}", parent=self.root)
+        if deleted_ok:
+            self._open_names.pop(folder.lower(), None)
+        self._refresh_after_folder_change()
 
     def _ask_move_overwrite(self, collisions: list[tuple[int, int]], dest: str) -> bool:
         """移動先に同一コードがあるときの上書き確認。初期フォーカスは「キャンセル」。"""
