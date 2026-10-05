@@ -8,6 +8,7 @@ import app as app_module
 from app import (
     _app_dir,
     _description_for_copy,
+    _center_over,
     _draw_folder_icon,
     _filter_overwrite,
     _overwrite_predicate,
@@ -246,3 +247,45 @@ class TestDescriptionForCopy:
     def test_説明が空文字はNoneを返す(self):
         rec = {"text": "https://example.com", "type": "Q", "path": "...", "description": ""}
         assert _description_for_copy(rec) is None
+
+
+class TestCenterOver:
+    class _Top:
+        def __init__(self, geometry: str) -> None:
+            self.current = geometry
+
+        def update_idletasks(self) -> None:
+            pass
+
+        def geometry(self, value: str | None = None) -> str | None:
+            if value is None:
+                return self.current
+            self.current = value
+            return None
+
+    class _Parent:
+        def __init__(self, x: int, y: int, w: int, h: int) -> None:
+            self.x, self.y, self.w, self.h = x, y, w, h
+
+        def winfo_rootx(self) -> int:
+            return self.x
+
+        def winfo_rooty(self) -> int:
+            return self.y
+
+        def winfo_width(self) -> int:
+            return self.w
+
+        def winfo_height(self) -> int:
+            return self.h
+
+
+    def test_親ウィンドウの中央に置く(self):
+        top = self._Top("200x100+0+0")
+        _center_over(top, self._Parent(1920, 100, 800, 600))
+        assert top.current == "+2220+350"
+
+    def test_負の座標の左側モニターでも親の中央に置く(self):
+        top = self._Top("200x100+0+0")
+        _center_over(top, self._Parent(-1500, 50, 700, 500))
+        assert top.current == "+-1250+250"

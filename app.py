@@ -167,6 +167,16 @@ _FOLDER_ICON_SIZE = 14
 _FOLDER_ICON_KINDS = ("closed", "open", "empty")
 
 
+def _center_over(top: tk.Toplevel, parent: tk.Misc) -> None:
+    """ダイアログ top を、親ウィンドウ parent の中央（親があるモニター上）に配置する。"""
+    top.update_idletasks()
+    size = top.geometry().split("+")[0]
+    width, height = (int(v) for v in size.split("x"))
+    x = parent.winfo_rootx() + (parent.winfo_width() - width) // 2
+    y = parent.winfo_rooty() + (parent.winfo_height() - height) // 2
+    top.geometry(f"+{x}+{y}")
+
+
 def _draw_folder_icon(kind: str, scale: int = 1) -> Image.Image:
     """階層行の先頭に出す開閉マークを描く。closed=▶ / open=▼ / empty=中身がない階層の点。"""
     if kind not in _FOLDER_ICON_KINDS:
@@ -210,6 +220,7 @@ def show_enlarged(record: dict, root: tk.Tk, save_dir: Path) -> None:
     top.geometry("320x500")
     top.minsize(220, 320)
     top.resizable(True, True)
+    _center_over(top, root)
 
     # ── ボタン → info → 画像 の順に bottom から積む ──────────────────────────
     # 先に bottom 側を確保することで、画像が expand しても閉じるボタンが常に見える
@@ -368,6 +379,7 @@ class App:
         dlg.geometry("840x520")
         dlg.minsize(600, 400)
         dlg.resizable(True, True)
+        _center_over(dlg, self.root)
         self._import_dlg = dlg
 
         _parsed: list[ImportRow] = []   # CSV を読み込んだ直後の行（階層・重複の検証前）
@@ -1553,6 +1565,7 @@ class App:
         top = tk.Toplevel(self.root)
         top.title("重複確認")
         top.resizable(False, False)
+        _center_over(top, self.root)
         top.grab_set()
 
         disp_type = _TYPE_DISP.get(code_type, code_type)
@@ -1927,6 +1940,7 @@ class App:
         top.bind("<Return>", on_return)
         top.bind("<Escape>", lambda _: choose(None))
         top.protocol("WM_DELETE_WINDOW", lambda: choose(None))
+        _center_over(top, self.root)
         top.grab_set()
         cancel_btn.focus_force()
         self.root.wait_window(top)
@@ -1970,6 +1984,7 @@ class App:
         top.bind("<Return>", on_return)
         top.bind("<Escape>", lambda _: choose(None))
         top.protocol("WM_DELETE_WINDOW", lambda: choose(None))
+        _center_over(top, self.root)
         top.grab_set()
         cancel_btn.focus_force()  # 初期フォーカスは「キャンセル」
         self.root.wait_window(top)
@@ -2079,6 +2094,7 @@ class App:
         top.bind("<Return>", on_return)
         top.bind("<Escape>", lambda _: on_cancel())
         top.protocol("WM_DELETE_WINDOW", on_cancel)
+        _center_over(top, self.root)
         top.grab_set()
         cancel_btn.focus_force()  # ウィンドウマネージャが初期フォーカスを渡さない環境でも「キャンセル」に当てる
         self.root.wait_window(top)
