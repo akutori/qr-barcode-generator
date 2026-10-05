@@ -843,7 +843,7 @@ class TestListFolders:
 
     def test_不正な名前のディレクトリは除外する(self, tmp_path):
         (tmp_path / "CON").mkdir()
-        (tmp_path / "bad.").mkdir()
+        (tmp_path / ("x" * 51)).mkdir()  # 長すぎる名前（末尾ドットは Windows が作成時に除去するため使わない）
         (tmp_path / "ok").mkdir()
         assert list_folders(tmp_path, []) == ["ok"]
 
